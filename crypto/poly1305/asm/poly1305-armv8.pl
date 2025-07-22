@@ -109,6 +109,16 @@ poly1305_init:
 	csel	$d0,$d0,$r0,eq
 	csel	$d1,$d1,$r1,eq
 
+	tst w17, #ARMV8_SVE2
+
+	adrp	$r0,poly1305_blocks_sve2_2way
+	add	$r0,$r0,#:lo12:.Lpoly1305_blocks_sve2_2way
+	adrp	$r1,poly1305_emit_sve2
+	add	$r1,$r1,#:lo12:.Lpoly1305_emit_sve2
+
+	csel	$d0,$d0,$r0,eq
+	csel	$d1,$d1,$r1,eq
+
 #ifdef	__ILP32__
 	stp	w12,w13,[$len]
 #else
@@ -942,6 +952,690 @@ poly1305_emit_neon:
 
 	ret
 .size	poly1305_emit_neon,.-poly1305_emit_neon
+___
+
+my ($SVE_R0,$SVE_R1,$SVE_S1,$SVE_R2,$SVE_S2,$SVE_R3,$SVE_S3,$SVE_R4,$SVE_S4) = map("z$_.s",(0..8));
+my ($SVE_IN01_0,$SVE_IN01_1,$SVE_IN01_2,$SVE_IN01_3,$SVE_IN01_4) = map("z$_.s",(9..13));
+my ($SVE_IN23_0,$SVE_IN23_1,$SVE_IN23_2,$SVE_IN23_3,$SVE_IN23_4) = map("z$_.s",(14..18));
+my ($SVE_ACC0,$SVE_ACC1,$SVE_ACC2,$SVE_ACC3,$SVE_ACC4) = map("z$_.d",(19..23));
+my ($SVE_H0,$SVE_H1,$SVE_H2,$SVE_H3,$SVE_H4) = map("z$_.s",(24..28));
+my ($SVE_T0,$SVE_T1,$SVE_MASK) = map("z$_",(29..31));  //??
+
+$code.=<<___;
+.type	poly1305_blocks_sve2_2way,%function
+.align	5
+poly1305_blocks_sve2_2way:
+.Lpoly1305_blocks_sve2_2way:
+	// This is the SVE2 implementation for the 2-way poly1305 parallelism, 
+	//  requiring 128-bit registers. We don't expect it to be more efficient than Neon.
+	AARCH64_VALID_CALL_TARGET
+	ldr	$is_base2_26,[$ctx,#24]
+	cmp	$len,#128
+	b.hs	.Lblocks_sve2_2way
+	cbz	$is_base2_26,.Lpoly1305_blocks	// branch to scalar code, but only if not in base 2^26 already
+
+.Lblocks_sve2_2way:      // This is all exactly the same as in the Neon case
+	AARCH64_SIGN_LINK_REGISTER
+	stp	x29,x30,[sp,#-80]!
+	add	x29,sp,#0
+
+	ands	$len,$len,#-16
+	b.eq	.Lno_data_sve2_2way
+
+	cbz	$is_base2_26,.Lbase2_64_sve2_2way
+
+	ldp	w10,w11,[$ctx]		// load hash value base 2^26
+	ldp	w12,w13,[$ctx,#8]
+	ldr	w14,[$ctx,#16]
+
+	tst	$len,#31	// Take care of the first term (proceed if there is an odd number of terms, branch if even)
+	b.eq	.Leven_sve2_2way
+
+	ldp	$r0,$r1,[$ctx,#32]	// load key value
+
+	add	$h0,x10,x11,lsl#26	// base 2^26 -> base 2^64
+	lsr	$h1,x12,#12
+	adds	$h0,$h0,x12,lsl#52
+	add	$h1,$h1,x13,lsl#14
+	adc	$h1,$h1,xzr
+	lsr	$h2,x14,#24
+	adds	$h1,$h1,x14,lsl#40
+	adc	$d2,$h2,xzr		// can be partially reduced...
+
+	ldp	$d0,$d1,[$inp],#16	// load input
+	sub	$len,$len,#16
+	add	$s1,$r1,$r1,lsr#2	// s1 = r1 + (r1 >> 2)
+
+	and	$t0,$d2,#-4		// ... so reduce
+	and	$h2,$d2,#3
+	add	$t0,$t0,$d2,lsr#2
+	adds	$h0,$h0,$t0
+	adcs	$h1,$h1,xzr
+	adc	$h2,$h2,xzr
+
+#ifdef	__AARCH64EB__
+	rev	$d0,$d0
+	rev	$d1,$d1
+#endif
+	adds	$h0,$h0,$d0		// accumulate input
+	adcs	$h1,$h1,$d1
+	adc	$h2,$h2,$padbit
+
+	bl	poly1305_mult
+	ldr	x30,[sp,#8]
+
+	cbz	$padbit,.Lstore_base2_64_sve2_2way
+
+	and	x10,$h0,#0x03ffffff	// base 2^64 -> base 2^26
+	ubfx	x11,$h0,#26,#26
+	extr	x12,$h1,$h0,#52
+	and	x12,x12,#0x03ffffff
+	ubfx	x13,$h1,#14,#26
+	extr	x14,$h2,$h1,#40
+
+	cbnz	$len,.Leven_sve2_2way
+
+	stp	w10,w11,[$ctx]		// store hash value base 2^26
+	stp	w12,w13,[$ctx,#8]
+	str	w14,[$ctx,#16]
+	b	.Lno_data_sve2_2way
+
+.align	4
+.Lstore_base2_64_sve2_2way:
+	stp	$h0,$h1,[$ctx]		// store hash value base 2^64
+	stp	$h2,xzr,[$ctx,#16]	// note that is_base2_26 is zeroed
+	b	.Lno_data_sve2_2way
+
+.align	4
+.Lbase2_64_sve2_2way:
+	ldp	$r0,$r1,[$ctx,#32]	// load key value
+
+	ldp	$h0,$h1,[$ctx]		// load hash value base 2^64
+	ldr	$h2,[$ctx,#16]
+
+	tst	$len,#31
+	b.eq	.Linit_sve2_2way
+
+	ldp	$d0,$d1,[$inp],#16	// load input
+	sub	$len,$len,#16
+	add	$s1,$r1,$r1,lsr#2	// s1 = r1 + (r1 >> 2)
+#ifdef	__AARCH64EB__
+	rev	$d0,$d0
+	rev	$d1,$d1
+#endif
+	adds	$h0,$h0,$d0		// accumulate input
+	adcs	$h1,$h1,$d1
+	adc	$h2,$h2,$padbit
+
+	bl	poly1305_mult
+
+.Linit_sve2_2way:
+	and	x10,$h0,#0x03ffffff	// base 2^64 -> base 2^26
+	ubfx	x11,$h0,#26,#26
+	extr	x12,$h1,$h0,#52
+	and	x12,x12,#0x03ffffff
+	ubfx	x13,$h1,#14,#26
+	extr	x14,$h2,$h1,#40
+
+	stp	d8,d9,[sp,#16]		// meet ABI requirements
+	stp	d10,d11,[sp,#32]
+	stp	d12,d13,[sp,#48]
+	stp	d14,d15,[sp,#64]
+
+    // See if below can somehow be interleaved with above instructions for better perf.
+    eor     $SVE_H0, $SVE_H0, $SVE_H0
+    eor     $SVE_H1, $SVE_H1, $SVE_H1
+    eor     $SVE_H2, $SVE_H2, $SVE_H2
+    eor     $SVE_H3, $SVE_H3, $SVE_H3
+    eor     $SVE_H4, $SVE_H4, $SVE_H4
+
+	// Latency 5, throughput 1??? 
+	// Alternative: ptrue to set preds and cpy (but same latency and throughput).
+	// Could just use Neon's fmov here.... 
+    insr    $SVE_H0, x10
+    insr    $SVE_H1, x11
+    insr    $SVE_H2, x12
+    insr    $SVE_H3, x13
+    insr    $SVE_H4, x14
+
+	////////////////////////////////// initialize r^n table
+	mov	$h0,$r0			// r^1
+	add	$s1,$r1,$r1,lsr#2	// s1 = r1 + (r1 >> 2)
+	mov	$h1,$r1
+	mov	$h2,xzr
+	add	$ctx,$ctx,#48+12
+	bl	poly1305_splat
+
+	bl	poly1305_mult		// r^2
+	sub	$ctx,$ctx,#8        // re-ordering original Neon order
+	bl	poly1305_splat
+
+	bl	poly1305_mult		// r^3
+	add	$ctx,$ctx,#4
+	bl	poly1305_splat
+
+	bl	poly1305_mult		// r^4
+	sub	$ctx,$ctx,#8
+	bl	poly1305_splat
+	ldr	x30,[sp,#8]
+
+	add	$in2,$inp,#32
+	adrp	$zeros,.Lzeros
+	add	$zeros,$zeros,:lo12:.Lzeros
+	subs	$len,$len,#64
+	csel	$in2,$zeros,$in2,lo
+
+	mov	x4,#1
+	stur	x4,[$ctx,#-24]		// set is_base2_26
+	sub	$ctx,$ctx,#48		// restore original $ctx
+	b	.Ldo_sve2_2way
+
+.align	4
+.Leven_sve2_2way:
+	add	$in2,$inp,#32
+	adrp	$zeros,.Lzeros
+	add	$zeros,$zeros,:lo12:.Lzeros
+	subs	$len,$len,#64
+	csel	$in2,$zeros,$in2,lo
+
+	stp	d8,d9,[sp,#16]		// meet ABI requirements
+	stp	d10,d11,[sp,#32]
+	stp	d12,d13,[sp,#48]
+	stp	d14,d15,[sp,#64]
+
+    eor     $SVE_H0, $SVE_H0, $SVE_H0
+    eor     $SVE_H1, $SVE_H1, $SVE_H1
+    eor     $SVE_H2, $SVE_H2, $SVE_H2
+    eor     $SVE_H3, $SVE_H3, $SVE_H3
+    eor     $SVE_H4, $SVE_H4, $SVE_H4
+
+	// Latency 5, throughput 1??? 
+	// Alternative: ptrue to set preds and cpy (but same latency and throughput).
+	// Could just use Neon's fmov here.... 
+    insr    $SVE_H0, x10
+    insr    $SVE_H1, x11
+    insr    $SVE_H2, x12
+    insr    $SVE_H3, x13
+    insr    $SVE_H4, x14
+
+.Ldo_sve2_2way:
+	ldp	x8,x12,[$in2],#16	// inp[2:3] (or zero)
+	ldp	x9,x13,[$in2],#48
+
+	lsl	$padbit,$padbit,#24
+	add	x15,$ctx,#48
+
+    eor 	$SVE_IN23_0,$SVE_IN23_0,$SVE_IN23_0
+    eor 	$SVE_IN23_1,$SVE_IN23_1,$SVE_IN23_1
+    eor 	$SVE_IN23_2,$SVE_IN23_2,$SVE_IN23_2
+    eor 	$SVE_IN23_3,$SVE_IN23_3,$SVE_IN23_3
+    eor 	$SVE_IN23_4,$SVE_IN23_4,$SVE_IN23_4
+
+	// Also this:
+    ptrue   p0.b, ALL               // Set all-true predicate
+    ptrue   p1.s, VL1               // Predicate for lane 1
+    ptrue   p3.s, VL3               // Predicate for first 3 lanes
+    ptrue   p2.s, VL2               // Predicate for first 2 lanes
+    eor     p3.b, p0/z, p3.b, p2.b  // p3 now activates only lane 3
+
+#ifdef	__AARCH64EB__
+	rev	x8,x8
+	rev	x12,x12
+	rev	x9,x9
+	rev	x13,x13
+#endif
+
+    // Below I use `CPY from scalar` instruction - 
+	//  it has latency of 5 and throughput of 1
+	//  instead, I might try using `fmov` to SIMD and
+	//  then `CPY from SIMD&fp` - the first has latency 3 and throughput 1,
+	//  wile the second has latency 2 and throughput 4 (or even 6 on x925).
+	// But it is hardly better, and increases number ot instructions...
+    and 	w4, w8, #0x03ffffff         // w4 = limb 0 from stream 0 (inp[2]) - need to check it's OK to use single-word reg here!
+    and 	w5, w9, #0x03ffffff         // w5 = limb 0 from stream 1 (inp[3])
+    cpy 	$SVE_IN23_0, p1/m, w4       // Insert limb 0 (stream 0) into lane 0
+    cpy 	$SVE_IN23_0, p3/m, w5       // Insert limb 0 (stream 1) into lane 2 - need to interleave
+
+    ubfx	x6, x8, #26, #26            // w6 = limb 1 from stream 0 (inp[2])
+    ubfx	x7, x9, #26, #26            // w7 = limb 1 from stream 1 (inp[3])
+    cpy 	$SVE_IN23_1, p1/m, w6       // Insert limb 1 (stream 0) into lane 0
+    cpy 	$SVE_IN23_1, p3/m, w7       // Insert limb 1 (stream 1) into lane 2 - need to interleave
+
+    extr	x8, x12, x8, #52            // Reconstruct bits for limb 2 from stream 0
+    extr	x9, x13, x9, #52            // Reconstruct bits for limb 2 from stream 1
+    and 	w8, w8, #0x03ffffff         // w8 = limb 2 from stream 0
+    and 	w9, w9, #0x03ffffff         // w9 = limb 2 from stream 1
+    cpy 	$SVE_IN23_2, p1/m, w8       // Insert limb 2 (stream 0) into lane 0
+    cpy 	$SVE_IN23_2, p3/m, w9       // Insert limb 2 (stream 1) into lane 2 - need to interleave
+
+    ubfx	x10, x12, #14, #26          // w10 = limb 3 from stream 0
+    ubfx	x11, x13, #14, #26          // w11 = limb 3 from stream 1
+    cpy 	$SVE_IN23_3, p1/m, w10      // Insert limb 3 (stream 0) into lane 0
+    cpy 	$SVE_IN23_3, p3/m, w11      // Insert limb 3 (stream 1) into lane 2 - need to interleave
+
+	add		x12,$padbit,x12,lsr#40      // w12 = limb 4 from stream 0
+	add		x13,$padbit,x13,lsr#40      // w13 = limb 4 from stream 0
+    cpy		$SVE_IN23_4, p1/m, w12      // Insert limb 3 (stream 0) into lane 0
+    cpy		$SVE_IN23_4, p3/m, w13      // Insert limb 3 (stream 1) into lane 2 - need to interleave
+
+	ldp		x8,x12,[$inp],#16	        // inp[0:1]
+	ldp		x9,x13,[$inp],#48
+
+    eor     $SVE_IN01_0,$SVE_IN01_0,$SVE_IN01_0  // interleave with above?
+    eor     $SVE_IN01_1,$SVE_IN01_1,$SVE_IN01_1
+    eor     $SVE_IN01_2,$SVE_IN01_2,$SVE_IN01_2
+    eor     $SVE_IN01_3,$SVE_IN01_3,$SVE_IN01_3
+    eor     $SVE_IN01_4,$SVE_IN01_4,$SVE_IN01_4
+
+	// while LD4W { <Zt1>.S, <Zt2>.S, <Zt3>.S, <Zt4>.S }, <Pg>/Z, [<Xn|SP>{, #<imm>, MUL VL}]
+	// exists in FEAT_SVE, it de-interleaves - I will need to re-write poly1305_splat (or just usage below?...)
+	// Contiguous load exists in FEAT_SVE2v1, this should be possible in the future:
+	// LD1W { <Zt1>.S-<Zt2>.S }, <PNg>/Z, [<Xn|SP>{, #<imm>, MUL VL}]
+	// For now I will have to live with the following (interleave interleave?):
+    ld1w    { $SVE_R0 }, p0/z, [x15]            
+    ld1w    { $SVE_R1 }, p0/z, [x15, #1, MUL VL]
+    ld1w    { $SVE_S1 }, p0/z, [x15, #2, MUL VL]
+    ld1w    { $SVE_R2 }, p0/z, [x15, #3, MUL VL]
+    ld1w    { $SVE_S2 }, p0/z, [x15, #4, MUL VL]
+    ld1w    { $SVE_R3 }, p0/z, [x15, #5, MUL VL]
+    ld1w    { $SVE_S3 }, p0/z, [x15, #6, MUL VL]
+    ld1w    { $SVE_R4 }, p0/z, [x15, #7, MUL VL]
+    ld1w    { $SVE_S4 }, p0/z, [x15, #8, MUL VL]
+
+#ifdef	__AARCH64EB__
+	rev	x8,x8
+	rev	x12,x12
+	rev	x9,x9
+	rev	x13,x13
+#endif
+
+    and 	w4, w8, #0x03ffffff         // w4 = limb 0 from stream 0 (inp[0]) - need to check it's OK to use single-word reg here!
+    and 	w5, w9, #0x03ffffff         // w5 = limb 0 from stream 1 (inp[1])
+    cpy 	$SVE_IN01_0, p1/m, w4       // Insert limb 0 (stream 0) into lane 0
+    cpy 	$SVE_IN01_0, p3/m, w5       // Insert limb 0 (stream 1) into lane 2 - need to interleave
+
+    ubfx	x6, x8, #26, #26            // w6 = limb 1 from stream 0
+    ubfx	x7, x9, #26, #26            // w7 = limb 1 from stream 1
+    cpy 	$SVE_IN01_1, p1/m, w6       // Insert limb 1 (stream 0) into lane 0
+    cpy 	$SVE_IN01_1, p3/m, w7       // Insert limb 1 (stream 1) into lane 2 - need to interleave
+
+    extr	x8, x12, x8, #52            // Reconstruct bits for limb 2 from stream 0
+    extr	x9, x13, x9, #52            // Reconstruct bits for limb 2 from stream 1
+    and 	w8, w8, #0x03ffffff         // w8 = limb 2 from stream 0
+    and 	w9, w9, #0x03ffffff         // w9 = limb 2 from stream 1
+    cpy 	$SVE_IN01_2, p1/m, w8       // Insert limb 2 (stream 0) into lane 0
+    cpy 	$SVE_IN01_2, p3/m, w9       // Insert limb 2 (stream 1) into lane 2 - need to interleave
+
+    ubfx	x10, x12, #14, #26          // w10 = limb 3 from stream 0
+    ubfx	x11, x13, #14, #26          // w11 = limb 3 from stream 1
+    cpy 	$SVE_IN01_3, p1/m, w10      // Insert limb 3 (stream 0) into lane 0
+    cpy 	$SVE_IN01_3, p3/m, w11      // Insert limb 3 (stream 1) into lane 2 - need to interleave
+
+	add		x12,$padbit,x12,lsr#40      // w12 = limb 4 from stream 0
+	add		x13,$padbit,x13,lsr#40      // w13 = limb 4 from stream 0
+	dup		${SVE_MASK}.d,#-1
+    cpy		$SVE_IN01_4, p1/m, w12      // Insert limb 3 (stream 0) into lane 0
+    cpy		$SVE_IN01_4, p3/m, w13      // Insert limb 3 (stream 1) into lane 2 - need to interleave
+	lsr		${SVE_MASK}.d,${SVE_MASK}.d,#38
+
+	b.ls	.Lskip_loop
+
+.align	4
+.Loop_neon:
+	////////////////////////////////////////////////////////////////
+	// ((inp[0]*r^4+inp[2]*r^2+inp[4])*r^4+inp[6]*r^2
+	// ((inp[1]*r^4+inp[3]*r^2+inp[5])*r^3+inp[7]*r
+	//   \___________________/
+	// ((inp[0]*r^4+inp[2]*r^2+inp[4])*r^4+inp[6]*r^2+inp[8])*r^2
+	// ((inp[1]*r^4+inp[3]*r^2+inp[5])*r^4+inp[7]*r^2+inp[9])*r
+	//   \___________________/ \____________________/
+	//
+	// Note that we start with inp[2:3]*r^2. This is because it
+	// doesn't depend on reduction in previous iteration.
+	////////////////////////////////////////////////////////////////
+	// d4 = h0*r4 + h1*r3   + h2*r2   + h3*r1   + h4*r0
+	// d3 = h0*r3 + h1*r2   + h2*r1   + h3*r0   + h4*5*r4
+	// d2 = h0*r2 + h1*r1   + h2*r0   + h3*5*r4 + h4*5*r3
+	// d1 = h0*r1 + h1*r0   + h2*5*r4 + h3*5*r3 + h4*5*r2
+	// d0 = h0*r0 + h1*5*r4 + h2*5*r3 + h3*5*r2 + h4*5*r1
+
+	subs	$len,$len,#64
+	umullb  $SVE_ACC4,$SVE_IN23_0,${SVE_R4}[1]  // remember - order changed from Neon impl.
+	csel	$in2,$zeros,$in2,lo
+	umullb	$SVE_ACC3,$SVE_IN23_0,${SVE_R3}[1]
+	umullb	$SVE_ACC2,$SVE_IN23_0,${SVE_R2}[1]
+	 ldp	x8,x12,[$in2],#16	                // inp[2:3] (or zero)
+	umullb	$SVE_ACC1,$SVE_IN23_0,${SVE_R1}[1]
+	 ldp	x9,x13,[$in2],#48
+	umullb	$SVE_ACC0,$SVE_IN23_0,${SVE_R0}[1]
+
+#ifdef	__AARCH64EB__
+	 rev	x8,x8
+	 rev	x12,x12
+	 rev	x9,x9
+	 rev	x13,x13
+#endif
+
+	umlalb	$SVE_ACC4,$SVE_IN23_1,${SVE_R3}[1]
+     and    w4, w8, #0x03ffffff
+	umlalb	$SVE_ACC3,$SVE_IN23_1,${SVE_R2}[1]
+     and    w5, w9, #0x03ffffff
+	umlalb	$SVE_ACC2,$SVE_IN23_1,${SVE_R1}[1]
+     cpy    $SVE_IN23_0, p1/m, w4
+	umlalb	$SVE_ACC1,$SVE_IN23_1,${SVE_R0}[1]
+     cpy    $SVE_IN23_0, p3/m, w5                // need to interleave better?
+	umlalb	$SVE_ACC0,$SVE_IN23_1,${SVE_S4}[1]
+
+     ubfx   x6, x8, #26, #26
+	umlalb	$SVE_ACC4,$SVE_IN23_2,${SVE_R2}[1]
+	 ubfx   x7, x9, #26, #26
+	umlalb	$SVE_ACC3,$SVE_IN23_2,${SVE_R1}[1]
+	 cpy    $SVE_IN23_1, p1/m, w6                // too soon?
+	umlalb	$SVE_ACC2,$SVE_IN23_2,${SVE_R0}[1]
+	 cpy    $SVE_IN23_1, p3/m, w7
+	umlalb	$SVE_ACC1,$SVE_IN23_2,${SVE_S4}[1]
+	 extr   x8, x12, x8, #52                     // starting the next limb...
+	umlalb	$SVE_ACC0,$SVE_IN23_2,${SVE_S3}[1]
+
+     extr   x9, x13, x9, #52
+	umlalb	$SVE_ACC4,$SVE_IN23_3,${SVE_R1}[1]
+	 and    w8, w8, #0x03ffffff
+	umlalb	$SVE_ACC3,$SVE_IN23_3,${SVE_R0}[1]
+	 and    w9, w9, #0x03ffffff
+	umlalb	$SVE_ACC2,$SVE_IN23_3,${SVE_S4}[1]
+	 cpy    $SVE_IN23_2, p1/m, w8                // too soon?
+	umlalb	$SVE_ACC1,$SVE_IN23_3,${SVE_S3}[1]
+	 cpy    $SVE_IN23_2, p3/m, w9
+	umlalb	$SVE_ACC0,$SVE_IN23_3,${SVE_S2}[1]
+
+	add		$SVE_IN01_2,$SVE_IN01_2,$H2
+	 ubfx   x10, x12, #14, #26
+	umlalb	$SVE_ACC4,$SVE_IN23_4,${SVE_R0}[1]
+	 ubfx   x11, x13, #14, #26
+	umlalb	$SVE_ACC3,$SVE_IN23_4,${SVE_S4}[1]
+	 cpy    $SVE_IN23_3, p1/m, w10               // too soon?
+	umlalb	$SVE_ACC2,$SVE_IN23_4,${SVE_S3}[1]
+	 cpy    $SVE_IN23_3, p3/m, w11
+	umlalb	$SVE_ACC1,$SVE_IN23_4,${SVE_S2}[1]
+	 add	   x12,$padbit,x12,lsr#40            // Start next limb...
+	umlalb	$SVE_ACC0,$SVE_IN23_4,${SVE_S1}[1]
+	 add	   x13,$padbit,x13,lsr#40
+
+	////////////////////////////////////////////////////////////////
+	// (hash+inp[0:1])*r^4 and accumulate
+
+	// Here R1-S3 index remains unchanged from Neon impl.
+	add		$SVE_IN01_0,$SVE_IN01_0,$H0
+	 cpy    $SVE_IN23_4, p1/m, w12
+	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[0]  // Not sure why start from 01_2 here, should be easier to start from 01_0
+	 cpy    $SVE_IN23_4, p3/m, w13
+	umlalb	$SVE_ACC0,$SVE_IN01_2,${SVE_S3}[0]
+	 ldp	x8,x12,[$inp],#16	                  // inp[0:1]
+	umlalb	$SVE_ACC4,$SVE_IN01_2,${SVE_R2}[0]
+	 ldp	x9,x13,[$inp],#48
+	umlalb	$SVE_ACC1,$SVE_IN01_2,${SVE_S4}[0]
+	umlalb	$SVE_ACC2,$SVE_IN01_2,${SVE_R0}[0]
+
+#ifdef	__AARCH64EB__
+	 rev	x8,x8
+	 rev	x12,x12
+	 rev	x9,x9
+	 rev	x13,x13
+#endif
+
+	add		$SVE_IN01_1,$SVE_IN01_1,$H1
+	 and    w4, w8, #0x03ffffff
+	umlalb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[0]
+	 and    w5, w9, #0x03ffffff
+	umlalb	$SVE_ACC4,$SVE_IN01_0,${SVE_R4}[0]
+	 ubfx   x6, x8, #26, #26                       // here I am postponing copying into IN01...
+	umlalb	$SVE_ACC2,$SVE_IN01_0,${SVE_R2}[0]
+	 ubfx   x7, x9, #26, #26
+	umlalb	$SVE_ACC0,$SVE_IN01_0,${SVE_R0}[0]
+	 extr   x8, x12, x8, #52                       // starting lobe 3 already...
+	umlalb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[0]
+	 extr   x9, x13, x9, #52
+
+	add		$SVE_IN01_3,$SVE_IN01_3,$H3
+	 and    w8, w8, #0x03ffffff
+	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[0]
+	 and    w9, w9, #0x03ffffff
+	umlalb	$SVE_ACC4,$SVE_IN01_1,${SVE_R3}[0]
+	 cpy    $SVE_IN01_0, p1/m, w4
+	umlalb	$SVE_ACC0,$SVE_IN01_1,${SVE_S4}[0]
+	 cpy    $SVE_IN01_0, p3/m, w5                   // interleave more?
+	umlalb	$SVE_ACC2,$SVE_IN01_1,${SVE_R1}[0]
+	 ubfx   x10, x12, #14, #26
+	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[0]
+	 ubfx   x11, x13, #14, #26
+
+	add		$SVE_IN01_4,$SVE_IN01_4,$H4
+	 cpy    $SVE_IN01_2, p1/m, w8
+	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[0]
+	 cpy    $SVE_IN01_2, p3/m, w9
+	umlalb	$SVE_ACC0,$SVE_IN01_3,${SVE_S2}[0]
+	 add	   x12,$padbit,x12,lsr#40
+	umlalb	$SVE_ACC4,$SVE_IN01_3,${SVE_R1}[0]
+	 add	   x13,$padbit,x13,lsr#40
+	umlalb	$SVE_ACC1,$SVE_IN01_3,${SVE_S3}[0]
+	 cpy    $SVE_IN01_1, p1/m, w6
+	umlalb	$SVE_ACC2,$SVE_IN01_3,${SVE_S4}[0]
+	 cpy    $SVE_IN01_1, p3/m, w7
+
+	umlalb	$SVE_ACC3,$SVE_IN01_4,${SVE_S4}[0]
+	 cpy    $SVE_IN01_3, p1/m, w10                 // too many copies in a row - should restructure
+	umlalb	$SVE_ACC0,$SVE_IN01_4,${SVE_S1}[0]
+	 cpy    $SVE_IN01_3, p3/m, w11
+	umlalb	$SVE_ACC4,$SVE_IN01_4,${SVE_R0}[0]
+	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[0]
+	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[0]
+	 cpy    $SVE_IN01_4, p1/m, w12
+	 cpy    $SVE_IN01_4, p3/m, w13
+
+	/////////////////////////////////////////////////////////////////
+	// lazy reduction as discussed in "NEON crypto" by D.J. Bernstein
+	// and P. Schwabe
+
+	lsr		${T0}.d,$SVE_ACC3,#26
+	shrnb	$H3,$SVE_ACC3,#0                    // effectively reproducing Neon's `xtn`.
+	lsr		${T1}.d,$SVE_ACC0,#26
+	and 	$SVE_ACC0,$SVE_ACC0,${SVE_MASK}.d
+	add		$SVE_ACC4,$SVE_ACC4,${T0}.d	    // h3 -> h4
+	// Neon's bic is replaced with mov, dup and and
+	mov 	w10,#0x03ffffff
+	// below is redundant but.. harmless? Slows down things however...
+	dup 	${T0}.s,w10                         //lat/thpt : 3/1 - can I use another temporary reg - say H0?
+	and 	$H3,$H3,${T0}.s
+	add		$SVE_ACC1,$SVE_ACC1,${T1}.d	    // h0 -> h1
+
+    lsr		${T0}.d,$SVE_ACC4,#26
+	shrnb	$H4,$SVE_ACC4,#0
+    lsr		${T1}.d,$SVE_ACC1,#26
+	shrnb	$H1,$SVE_ACC1,#0
+	mov 	w11,#0x03ffffff
+	dup 	$H0,w11                             // Using H0 as a tmp - check that's OK
+	and 	$H4,$H4,$H0
+	add		$SVE_ACC2,$SVE_ACC2,${T1}.d	        // h1 -> h2
+	eor 	$H0,$H0,$H0                         // Is this needed?
+
+	add		$SVE_ACC0,$SVE_ACC0,${T0}.d
+	lsl 	${T0}.d,${T0}.d,#2
+	shrnb	${T1}.s,$SVE_ACC2,#26                // check it's OK
+	shrnb 	$H2,$SVE_ACC2,#0
+	add 	$SVE_ACC0,$SVE_ACC0,${T0}.d	         // h4 -> h0
+	mov 	w12,#0x03ffffff
+	dup 	${T0}.s,w12                          // check if can use another reg.
+	and 	$H1,$H1,${T0}.s
+	add 	$H3,$H3,${T1}.s		                 // h2 -> h3
+	mov 	w13,#0x03ffffff
+	dup 	${T1}.s,w13                          // check if can use another reg.
+	and 	$H2,$H2,${T1}.s
+
+    shrnb	${T0}.s,$SVE_ACC0,#26
+    shrnb	$H0,$SVE_ACC0,#0
+    lsr 	${T1}.s,$H3,#26
+	//re-ordered below - check if OK
+	add		$H1,$H1,${T0}.s		                 // h0 -> h1
+	add		$H4,$H4,${T1}.s		                 // h3 -> h4
+	mov 	w10,#0x03ffffff
+	dup 	${T0}.s,w10
+	and 	$H3,$H3,${T0}.s
+	mov 	w11,#0x03ffffff
+	dup 	${T1}.s,w11
+	and 	$H0,$H0,${T1}.s
+
+	b.hi	.Loop_neon
+
+.Lskip_loop:
+    trn1	$SVE_IN23_2,$SVE_IN23_2,$SVE_IN23_2
+	add		$SVE_IN01_2,$SVE_IN01_2,$H2
+
+	////////////////////////////////////////////////////////////////
+	// multiply (inp[0:1]+hash) or inp[2:3] by r^2:r^1
+
+	adds	$len,$len,#32
+	b.ne	.Long_tail
+
+    trn1	$SVE_IN23_2,$SVE_IN01_2,$SVE_IN01_2
+	add		$SVE_IN23_0,$SVE_IN01_0,$H0
+	add		$SVE_IN23_3,$SVE_IN01_3,$H3
+	add		$SVE_IN23_1,$SVE_IN01_1,$H1
+	add		$SVE_IN23_4,$SVE_IN01_4,$H4
+
+.Long_tail:
+    trn1	$SVE_IN23_0,$SVE_IN23_0,$SVE_IN23_0
+	umullt	$SVE_ACC0,$SVE_IN23_2,$SVE_S3
+	umullt	$SVE_ACC3,$SVE_IN23_2,$SVE_R1
+	umullt	$SVE_ACC4,$SVE_IN23_2,$SVE_R2
+	umullt	$SVE_ACC2,$SVE_IN23_2,$SVE_R0
+	umullt	$SVE_ACC1,$SVE_IN23_2,$SVE_S4
+
+    trn1	$SVE_IN23_1,$SVE_IN23_1,$SVE_IN23_1
+	umlalt	$SVE_ACC0,$SVE_IN23_0,$SVE_R0
+	umlalt	$SVE_ACC2,$SVE_IN23_0,$SVE_R2
+	umlalt	$SVE_ACC3,$SVE_IN23_0,$SVE_R3
+	umlalt	$SVE_ACC4,$SVE_IN23_0,$SVE_R4
+	umlalt	$SVE_ACC1,$SVE_IN23_0,$SVE_R1
+
+    trn1	$SVE_IN23_3,$SVE_IN23_3,$SVE_IN23_3
+	umlalt	$SVE_ACC0,$SVE_IN23_1,$SVE_S4
+	umlalt	$SVE_ACC3,$SVE_IN23_1,$SVE_R2
+	umlalt	$SVE_ACC2,$SVE_IN23_1,$SVE_R1
+	umlalt	$SVE_ACC4,$SVE_IN23_1,$SVE_R3
+	umlalt	$SVE_ACC1,$SVE_IN23_1,$SVE_R0
+
+    trn1	$SVE_IN23_4,$SVE_IN23_4,$SVE_IN23_4
+	umlalt	$SVE_ACC3,$SVE_IN23_3,$SVE_R0
+	umlalt	$SVE_ACC4,$SVE_IN23_3,$SVE_R1
+	umlalt	$SVE_ACC0,$SVE_IN23_3,$SVE_S2
+	umlalt	$SVE_ACC1,$SVE_IN23_3,$SVE_S3
+	umlalt	$SVE_ACC2,$SVE_IN23_3,$SVE_S4
+
+	umlalt	$SVE_ACC3,$SVE_IN23_4,$SVE_S4
+	umlalt	$SVE_ACC0,$SVE_IN23_4,$SVE_S1
+	umlalt	$SVE_ACC4,$SVE_IN23_4,$SVE_R0
+	umlalt	$SVE_ACC1,$SVE_IN23_4,$SVE_S2
+	umlalt	$SVE_ACC2,$SVE_IN23_4,$SVE_S3
+
+	b.eq	.Lshort_tail
+
+	////////////////////////////////////////////////////////////////
+	// (hash+inp[0:1])*r^4:r^3 and accumulate
+
+	add		$SVE_IN01_0,$SVE_IN01_0,$H0
+	umlalb	$SVE_ACC3,$SVE_IN01_2,$SVE_R1
+	umlalb	$SVE_ACC0,$SVE_IN01_2,$SVE_S3
+	umlalb	$SVE_ACC4,$SVE_IN01_2,$SVE_R2
+	umlalb	$SVE_ACC1,$SVE_IN01_2,$SVE_S4
+	umlalb	$SVE_ACC2,$SVE_IN01_2,$SVE_R0
+
+	add		$SVE_IN01_1,$SVE_IN01_1,$H1
+	umlalb	$SVE_ACC3,$SVE_IN01_0,$SVE_R3
+	umlalb	$SVE_ACC0,$SVE_IN01_0,$SVE_R0
+	umlalb	$SVE_ACC4,$SVE_IN01_0,$SVE_R4
+	umlalb	$SVE_ACC1,$SVE_IN01_0,$SVE_R1
+	umlalb	$SVE_ACC2,$SVE_IN01_0,$SVE_R2
+
+	add		$SVE_IN01_3,$SVE_IN01_3,$H3
+	umlalb	$SVE_ACC3,$SVE_IN01_1,$SVE_R2
+	umlalb	$SVE_ACC0,$SVE_IN01_1,$SVE_S4
+	umlalb	$SVE_ACC4,$SVE_IN01_1,$SVE_R3
+	umlalb	$SVE_ACC1,$SVE_IN01_1,$SVE_R0
+	umlalb	$SVE_ACC2,$SVE_IN01_1,$SVE_R1
+
+	add		$SVE_IN01_4,$SVE_IN01_4,$H4
+	umlalb	$SVE_ACC3,$SVE_IN01_3,$SVE_R0
+	umlalb	$SVE_ACC0,$SVE_IN01_3,$SVE_S2
+	umlalb	$SVE_ACC4,$SVE_IN01_3,$SVE_R1
+	umlalb	$SVE_ACC1,$SVE_IN01_3,$SVE_S3
+	umlalb	$SVE_ACC2,$SVE_IN01_3,$SVE_S4
+
+	umlalb	$SVE_ACC3,$SVE_IN01_4,$SVE_S4
+	umlalb	$SVE_ACC0,$SVE_IN01_4,$SVE_S1
+	umlalb	$SVE_ACC4,$SVE_IN01_4,$SVE_R0
+	umlalb	$SVE_ACC1,$SVE_IN01_4,$SVE_S2
+	umlalb	$SVE_ACC2,$SVE_IN01_4,$SVE_S3
+
+.Lshort_tail:
+	////////////////////////////////////////////////////////////////
+	// horizontal add
+
+	//In Neon implementation, one effectively using lower 64 bits of vector registers here.
+	//Here and below I use hard-coded FP registers, could introduce new variables...
+
+	uaddv   d22, p0, $SVE_ACC3
+	 ldp	d8,d9,[sp,#16]		// meet ABI requirements
+	uaddv   d19, p0, $SVE_ACC0
+	 ldp	d10,d11,[sp,#32]
+	uaddv   d23, p0, $SVE_ACC4
+	 ldp	d12,d13,[sp,#48]
+	uaddv   d20, p0, $SVE_ACC1
+	 ldp	d14,d15,[sp,#64]
+	uaddv   d21, p0, $SVE_ACC2
+
+	////////////////////////////////////////////////////////////////
+	// lazy reduction, but without narrowing
+
+	ushr	d29,d22,#26
+	and		d22,d22,d31
+	ushr	d30,d19,#26
+	and		d19,d19,d31
+
+	add 	d23,d23,d29  // h3 -> h4
+	add 	d20,d20,d30  // h0 -> h1
+
+	ushr	d29,d23,#26
+	and 	d23,d23,d31
+	ushr	d30,d20,#26
+	and 	d20,d20,d31
+	and 	d21,d21,d30  //h1 -> h2
+
+	add 	d19,d19,d29
+	shl 	d29,d29,#2
+	ushr	d30,d21,#26
+	and 	d21,d21,d31
+	add 	d19,d19,d29  // h4 -> h0
+	add 	d22,d22,d30  // h2 -> h3
+
+    ushr	d29,d19,#26
+	and 	d19,d19,d31
+	ushr 	d30,d22,#26
+	and 	d22,d22,d31
+	add 	d20,d20,d29  // h0 -> h1
+	add 	d23,d23,d30  // h3 -> h4
+
+	////////////////////////////////////////////////////////////////
+	// write the result, can be partially reduced
+
+	stp 	s19,s20,[#ctx],8
+	stp 	s21,s22,[#ctx],8
+	str 	s23,[#ctx]
+	
+.Lno_data_sve2_2way:
+	ldr	x29,[sp],#80
+	AARCH64_VALIDATE_LINK_REGISTER
+	ret
+.size	poly1305_blocks_sve2_2way,.-poly1305_blocks_sve2_2way
 
 .rodata
 
