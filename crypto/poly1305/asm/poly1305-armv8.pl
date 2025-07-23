@@ -113,11 +113,8 @@ poly1305_init:
 
 	adrp	$r0,poly1305_blocks_sve2_2way
 	add	$r0,$r0,#:lo12:.Lpoly1305_blocks_sve2_2way
-	adrp	$r1,poly1305_emit_sve2
-	add	$r1,$r1,#:lo12:.Lpoly1305_emit_sve2
 
 	csel	$d0,$d0,$r0,eq
-	csel	$d1,$d1,$r1,eq
 
 #ifdef	__ILP32__
 	stp	w12,w13,[$len]
@@ -954,12 +951,15 @@ poly1305_emit_neon:
 .size	poly1305_emit_neon,.-poly1305_emit_neon
 ___
 
+# --- SVE2 Section ---
+$code .= ".arch armv8-a+sve2\n";
+
 my ($SVE_R0,$SVE_R1,$SVE_S1,$SVE_R2,$SVE_S2,$SVE_R3,$SVE_S3,$SVE_R4,$SVE_S4) = map("z$_.s",(0..8));
 my ($SVE_IN01_0,$SVE_IN01_1,$SVE_IN01_2,$SVE_IN01_3,$SVE_IN01_4) = map("z$_.s",(9..13));
 my ($SVE_IN23_0,$SVE_IN23_1,$SVE_IN23_2,$SVE_IN23_3,$SVE_IN23_4) = map("z$_.s",(14..18));
 my ($SVE_ACC0,$SVE_ACC1,$SVE_ACC2,$SVE_ACC3,$SVE_ACC4) = map("z$_.d",(19..23));
 my ($SVE_H0,$SVE_H1,$SVE_H2,$SVE_H3,$SVE_H4) = map("z$_.s",(24..28));
-my ($SVE_T0,$SVE_T1,$SVE_MASK) = map("z$_",(29..31));  //??
+my ($SVE_T0,$SVE_T1,$SVE_MASK) = map("z$_",(29..31));
 
 $code.=<<___;
 .type	poly1305_blocks_sve2_2way,%function
@@ -1083,20 +1083,20 @@ poly1305_blocks_sve2_2way:
 	stp	d14,d15,[sp,#64]
 
     // See if below can somehow be interleaved with above instructions for better perf.
-    eor     $SVE_H0, $SVE_H0, $SVE_H0
-    eor     $SVE_H1, $SVE_H1, $SVE_H1
-    eor     $SVE_H2, $SVE_H2, $SVE_H2
-    eor     $SVE_H3, $SVE_H3, $SVE_H3
-    eor     $SVE_H4, $SVE_H4, $SVE_H4
+	eor 	z24.d,z24.d,z24.d  // H0
+	eor 	z25.d,z25.d,z25.d  // H1
+	eor 	z26.d,z26.d,z26.d  // H2
+	eor 	z27.d,z27.d,z27.d  // H3
+	eor 	z28.d,z28.d,z28.d  // H4
 
 	// Latency 5, throughput 1??? 
 	// Alternative: ptrue to set preds and cpy (but same latency and throughput).
 	// Could just use Neon's fmov here.... 
-    insr    $SVE_H0, x10
-    insr    $SVE_H1, x11
-    insr    $SVE_H2, x12
-    insr    $SVE_H3, x13
-    insr    $SVE_H4, x14
+    insr    $SVE_H0, w10
+    insr    $SVE_H1, w11
+    insr    $SVE_H2, w12
+    insr    $SVE_H3, w13
+    insr    $SVE_H4, w14
 
 	////////////////////////////////// initialize r^n table
 	mov	$h0,$r0			// r^1
@@ -1143,20 +1143,20 @@ poly1305_blocks_sve2_2way:
 	stp	d12,d13,[sp,#48]
 	stp	d14,d15,[sp,#64]
 
-    eor     $SVE_H0, $SVE_H0, $SVE_H0
-    eor     $SVE_H1, $SVE_H1, $SVE_H1
-    eor     $SVE_H2, $SVE_H2, $SVE_H2
-    eor     $SVE_H3, $SVE_H3, $SVE_H3
-    eor     $SVE_H4, $SVE_H4, $SVE_H4
+	eor 	z24.d,z24.d,z24.d  // H0
+	eor 	z25.d,z25.d,z25.d  // H1
+	eor 	z26.d,z26.d,z26.d  // H2
+	eor 	z27.d,z27.d,z27.d  // H3
+	eor 	z28.d,z28.d,z28.d  // H4
 
 	// Latency 5, throughput 1??? 
 	// Alternative: ptrue to set preds and cpy (but same latency and throughput).
 	// Could just use Neon's fmov here.... 
-    insr    $SVE_H0, x10
-    insr    $SVE_H1, x11
-    insr    $SVE_H2, x12
-    insr    $SVE_H3, x13
-    insr    $SVE_H4, x14
+    insr    $SVE_H0, w10
+    insr    $SVE_H1, w11
+    insr    $SVE_H2, w12
+    insr    $SVE_H3, w13
+    insr    $SVE_H4, w14
 
 .Ldo_sve2_2way:
 	ldp	x8,x12,[$in2],#16	// inp[2:3] (or zero)
@@ -1165,11 +1165,11 @@ poly1305_blocks_sve2_2way:
 	lsl	$padbit,$padbit,#24
 	add	x15,$ctx,#48
 
-    eor 	$SVE_IN23_0,$SVE_IN23_0,$SVE_IN23_0
-    eor 	$SVE_IN23_1,$SVE_IN23_1,$SVE_IN23_1
-    eor 	$SVE_IN23_2,$SVE_IN23_2,$SVE_IN23_2
-    eor 	$SVE_IN23_3,$SVE_IN23_3,$SVE_IN23_3
-    eor 	$SVE_IN23_4,$SVE_IN23_4,$SVE_IN23_4
+	eor 	z14.d,z14.d,z14.d  // IN23_0
+	eor 	z15.d,z15.d,z15.d  // IN23_1
+	eor 	z16.d,z16.d,z16.d  // IN23_2
+	eor 	z17.d,z17.d,z17.d  // IN23_3
+	eor 	z18.d,z18.d,z18.d  // IN23_4
 
 	// Also this:
     ptrue   p0.b, ALL               // Set all-true predicate
@@ -1221,11 +1221,12 @@ poly1305_blocks_sve2_2way:
 	ldp		x8,x12,[$inp],#16	        // inp[0:1]
 	ldp		x9,x13,[$inp],#48
 
-    eor     $SVE_IN01_0,$SVE_IN01_0,$SVE_IN01_0  // interleave with above?
-    eor     $SVE_IN01_1,$SVE_IN01_1,$SVE_IN01_1
-    eor     $SVE_IN01_2,$SVE_IN01_2,$SVE_IN01_2
-    eor     $SVE_IN01_3,$SVE_IN01_3,$SVE_IN01_3
-    eor     $SVE_IN01_4,$SVE_IN01_4,$SVE_IN01_4
+    // interleave with above?
+	eor 	z9.d,z9.d,z9.d     // IN01_0
+	eor 	z10.d,z10.d,z10.d  // IN01_1
+	eor 	z11.d,z11.d,z11.d  // IN01_2
+	eor 	z12.d,z12.d,z12.d  // IN01_3
+	eor 	z13.d,z13.d,z13.d  // IN01_4
 
 	// while LD4W { <Zt1>.S, <Zt2>.S, <Zt3>.S, <Zt4>.S }, <Pg>/Z, [<Xn|SP>{, #<imm>, MUL VL}]
 	// exists in FEAT_SVE, it de-interleaves - I will need to re-write poly1305_splat (or just usage below?...)
@@ -1240,7 +1241,8 @@ poly1305_blocks_sve2_2way:
     ld1w    { $SVE_R3 }, p0/z, [x15, #5, MUL VL]
     ld1w    { $SVE_S3 }, p0/z, [x15, #6, MUL VL]
     ld1w    { $SVE_R4 }, p0/z, [x15, #7, MUL VL]
-    ld1w    { $SVE_S4 }, p0/z, [x15, #8, MUL VL]
+	add     x15, x15, #128     // [x15, #8, MUL VL] would be out of bounds..
+    ld1w    { $SVE_S4 }, p0/z, [x15]
 
 #ifdef	__AARCH64EB__
 	rev	x8,x8
@@ -1278,10 +1280,10 @@ poly1305_blocks_sve2_2way:
     cpy		$SVE_IN01_4, p3/m, w13      // Insert limb 3 (stream 1) into lane 2 - need to interleave
 	lsr		${SVE_MASK}.d,${SVE_MASK}.d,#38
 
-	b.ls	.Lskip_loop
+	b.ls	.Lskip_loop_sve2_2way
 
 .align	4
-.Loop_neon:
+.Loop_sve2_2way:
 	////////////////////////////////////////////////////////////////
 	// ((inp[0]*r^4+inp[2]*r^2+inp[4])*r^4+inp[6]*r^2
 	// ((inp[1]*r^4+inp[3]*r^2+inp[5])*r^3+inp[7]*r
@@ -1348,7 +1350,7 @@ poly1305_blocks_sve2_2way:
 	 cpy    $SVE_IN23_2, p3/m, w9
 	umlalb	$SVE_ACC0,$SVE_IN23_3,${SVE_S2}[1]
 
-	add		$SVE_IN01_2,$SVE_IN01_2,$H2
+	add		$SVE_IN01_2,$SVE_IN01_2,$SVE_H2
 	 ubfx   x10, x12, #14, #26
 	umlalb	$SVE_ACC4,$SVE_IN23_4,${SVE_R0}[1]
 	 ubfx   x11, x13, #14, #26
@@ -1365,7 +1367,7 @@ poly1305_blocks_sve2_2way:
 	// (hash+inp[0:1])*r^4 and accumulate
 
 	// Here R1-S3 index remains unchanged from Neon impl.
-	add		$SVE_IN01_0,$SVE_IN01_0,$H0
+	add		$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
 	 cpy    $SVE_IN23_4, p1/m, w12
 	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[0]  // Not sure why start from 01_2 here, should be easier to start from 01_0
 	 cpy    $SVE_IN23_4, p3/m, w13
@@ -1383,7 +1385,7 @@ poly1305_blocks_sve2_2way:
 	 rev	x13,x13
 #endif
 
-	add		$SVE_IN01_1,$SVE_IN01_1,$H1
+	add		$SVE_IN01_1,$SVE_IN01_1,$SVE_H1
 	 and    w4, w8, #0x03ffffff
 	umlalb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[0]
 	 and    w5, w9, #0x03ffffff
@@ -1396,7 +1398,7 @@ poly1305_blocks_sve2_2way:
 	umlalb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[0]
 	 extr   x9, x13, x9, #52
 
-	add		$SVE_IN01_3,$SVE_IN01_3,$H3
+	add		$SVE_IN01_3,$SVE_IN01_3,$SVE_H3
 	 and    w8, w8, #0x03ffffff
 	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[0]
 	 and    w9, w9, #0x03ffffff
@@ -1409,7 +1411,7 @@ poly1305_blocks_sve2_2way:
 	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[0]
 	 ubfx   x11, x13, #14, #26
 
-	add		$SVE_IN01_4,$SVE_IN01_4,$H4
+	add		$SVE_IN01_4,$SVE_IN01_4,$SVE_H4
 	 cpy    $SVE_IN01_2, p1/m, w8
 	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[0]
 	 cpy    $SVE_IN01_2, p3/m, w9
@@ -1436,73 +1438,71 @@ poly1305_blocks_sve2_2way:
 	// lazy reduction as discussed in "NEON crypto" by D.J. Bernstein
 	// and P. Schwabe
 
-	lsr		${T0}.d,$SVE_ACC3,#26
-	shrnb	$H3,$SVE_ACC3,#0                    // effectively reproducing Neon's `xtn`.
-	lsr		${T1}.d,$SVE_ACC0,#26
+	// Porting from Neon results in 37 vs 28 original instructions...
+
+	eor		z24.d,z24.d,z24.d					// using SVE_H0 as a tmp 0-val vector
+	mov 	x10,#0x03ffffff						// a scalar mask to `dup` into vectors
+
+	lsr		${SVE_T0}.d,$SVE_ACC3,#26
+	trn1	$SVE_H3,z22.s,z24.s					// reproducing Neon's `xtn` - treat ACC3 as a .s vector
+	lsr		${SVE_T1}.d,$SVE_ACC0,#26
 	and 	$SVE_ACC0,$SVE_ACC0,${SVE_MASK}.d
-	add		$SVE_ACC4,$SVE_ACC4,${T0}.d	    // h3 -> h4
-	// Neon's bic is replaced with mov, dup and and
-	mov 	w10,#0x03ffffff
-	// below is redundant but.. harmless? Slows down things however...
-	dup 	${T0}.s,w10                         //lat/thpt : 3/1 - can I use another temporary reg - say H0?
-	and 	$H3,$H3,${T0}.s
-	add		$SVE_ACC1,$SVE_ACC1,${T1}.d	    // h0 -> h1
+	add		$SVE_ACC4,$SVE_ACC4,${SVE_T0}.d	    // h3 -> h4
+	// Neon's bic is replaced with mov + dup + and
+	dup 	${SVE_T0}.d,x10						// lat/thpt : 3/1 - should I use another temporary reg - say H0?
+	and 	z27.d,z27.d,${SVE_T0}.d				// refer to SVE_H3 as .d
+	add		$SVE_ACC1,$SVE_ACC1,${SVE_T1}.d	    // h0 -> h1
 
-    lsr		${T0}.d,$SVE_ACC4,#26
-	shrnb	$H4,$SVE_ACC4,#0
-    lsr		${T1}.d,$SVE_ACC1,#26
-	shrnb	$H1,$SVE_ACC1,#0
-	mov 	w11,#0x03ffffff
-	dup 	$H0,w11                             // Using H0 as a tmp - check that's OK
-	and 	$H4,$H4,$H0
-	add		$SVE_ACC2,$SVE_ACC2,${T1}.d	        // h1 -> h2
-	eor 	$H0,$H0,$H0                         // Is this needed?
+    lsr		${SVE_T0}.d,$SVE_ACC4,#26
+	trn1	$SVE_H4,z23.s,z24.s					// reproducing Neon's `xtn` - treat ACC4 as a .s vector
+    lsr		${SVE_T1}.d,$SVE_ACC1,#26
+	trn1	$SVE_H1,z20.s,z24.s					// reproducing Neon's `xtn` - treat ACC1 as a .s vector
+	dup 	z24.d,x10							// Using H0 as a tmp as can't use T1 or T2 here - is it OK?
+	and 	z28.d,z28.d,z24.d					// refer to SVE_H4 as .d
+	add		$SVE_ACC2,$SVE_ACC2,${SVE_T1}.d	    // h1 -> h2
+	eor		z24.d,z24.d,z24.d                   // nullify H0 - is it needed?
 
-	add		$SVE_ACC0,$SVE_ACC0,${T0}.d
-	lsl 	${T0}.d,${T0}.d,#2
-	shrnb	${T1}.s,$SVE_ACC2,#26                // check it's OK
-	shrnb 	$H2,$SVE_ACC2,#0
-	add 	$SVE_ACC0,$SVE_ACC0,${T0}.d	         // h4 -> h0
-	mov 	w12,#0x03ffffff
-	dup 	${T0}.s,w12                          // check if can use another reg.
-	and 	$H1,$H1,${T0}.s
-	add 	$H3,$H3,${T1}.s		                 // h2 -> h3
-	mov 	w13,#0x03ffffff
-	dup 	${T1}.s,w13                          // check if can use another reg.
-	and 	$H2,$H2,${T1}.s
+	add		$SVE_ACC0,$SVE_ACC0,${SVE_T0}.d
+	lsl 	${SVE_T0}.d,${SVE_T0}.d,#2
+	shrnb	${SVE_T1}.s,$SVE_ACC2,#26			// check it's OK
+	trn1	$SVE_H2,z21.s,z24.s					// reproducing Neon's `xtn` - treat ACC2 as a .s vector
+	add 	$SVE_ACC0,$SVE_ACC0,${SVE_T0}.d		// h4 -> h0
+	dup 	${SVE_T0}.d,x10
+	and 	z25.d,z25.d,${SVE_T0}.d				// refer to SVE_H1 as .d
+	add 	$SVE_H3,$SVE_H3,${SVE_T1}.s			// h2 -> h3
+	dup 	${SVE_T1}.d,x10
+	and 	z26.d,z26.d,${SVE_T1}.d				// refer to SVE_H2 as .d
 
-    shrnb	${T0}.s,$SVE_ACC0,#26
-    shrnb	$H0,$SVE_ACC0,#0
-    lsr 	${T1}.s,$H3,#26
+    shrnb	${SVE_T0}.s,$SVE_ACC0,#26
+	trn1	$SVE_H0,z19.s,z24.s					// reproducing Neon's `xtn` - treat ACC0 as a .s vector - re-writing H0 here...
+    lsr 	${SVE_T1}.s,$SVE_H3,#26
 	//re-ordered below - check if OK
-	add		$H1,$H1,${T0}.s		                 // h0 -> h1
-	add		$H4,$H4,${T1}.s		                 // h3 -> h4
-	mov 	w10,#0x03ffffff
-	dup 	${T0}.s,w10
-	and 	$H3,$H3,${T0}.s
-	mov 	w11,#0x03ffffff
-	dup 	${T1}.s,w11
-	and 	$H0,$H0,${T1}.s
+	add		$SVE_H1,$SVE_H1,${SVE_T0}.s			// h0 -> h1
+	add		$SVE_H4,$SVE_H4,${SVE_T1}.s			// h3 -> h4
+	dup 	${SVE_T0}.d,x10
+	and 	z27.d,z27.d,${SVE_T0}.d				// refer to SVE_H3 as .d
+	dup 	${SVE_T1}.d,x10
+	and 	z24.d,z24.d,${SVE_T1}.d				// refer to SVE_H0 as .d
 
-	b.hi	.Loop_neon
+	b.hi	.Loop_sve2_2way
 
-.Lskip_loop:
+.Lskip_loop_sve2_2way:
     trn1	$SVE_IN23_2,$SVE_IN23_2,$SVE_IN23_2
-	add		$SVE_IN01_2,$SVE_IN01_2,$H2
+	add		$SVE_IN01_2,$SVE_IN01_2,$SVE_H2
 
 	////////////////////////////////////////////////////////////////
 	// multiply (inp[0:1]+hash) or inp[2:3] by r^2:r^1
 
 	adds	$len,$len,#32
-	b.ne	.Long_tail
+	b.ne	.Long_tail_sve2_2way
 
     trn1	$SVE_IN23_2,$SVE_IN01_2,$SVE_IN01_2
-	add		$SVE_IN23_0,$SVE_IN01_0,$H0
-	add		$SVE_IN23_3,$SVE_IN01_3,$H3
-	add		$SVE_IN23_1,$SVE_IN01_1,$H1
-	add		$SVE_IN23_4,$SVE_IN01_4,$H4
+	add		$SVE_IN23_0,$SVE_IN01_0,$SVE_H0
+	add		$SVE_IN23_3,$SVE_IN01_3,$SVE_H3
+	add		$SVE_IN23_1,$SVE_IN01_1,$SVE_H1
+	add		$SVE_IN23_4,$SVE_IN01_4,$SVE_H4
 
-.Long_tail:
+.Long_tail_sve2_2way:
     trn1	$SVE_IN23_0,$SVE_IN23_0,$SVE_IN23_0
 	umullt	$SVE_ACC0,$SVE_IN23_2,$SVE_S3
 	umullt	$SVE_ACC3,$SVE_IN23_2,$SVE_R1
@@ -1537,33 +1537,33 @@ poly1305_blocks_sve2_2way:
 	umlalt	$SVE_ACC1,$SVE_IN23_4,$SVE_S2
 	umlalt	$SVE_ACC2,$SVE_IN23_4,$SVE_S3
 
-	b.eq	.Lshort_tail
+	b.eq	.Lshort_tail_sve2_2way
 
 	////////////////////////////////////////////////////////////////
 	// (hash+inp[0:1])*r^4:r^3 and accumulate
 
-	add		$SVE_IN01_0,$SVE_IN01_0,$H0
+	add		$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
 	umlalb	$SVE_ACC3,$SVE_IN01_2,$SVE_R1
 	umlalb	$SVE_ACC0,$SVE_IN01_2,$SVE_S3
 	umlalb	$SVE_ACC4,$SVE_IN01_2,$SVE_R2
 	umlalb	$SVE_ACC1,$SVE_IN01_2,$SVE_S4
 	umlalb	$SVE_ACC2,$SVE_IN01_2,$SVE_R0
 
-	add		$SVE_IN01_1,$SVE_IN01_1,$H1
+	add		$SVE_IN01_1,$SVE_IN01_1,$SVE_H1
 	umlalb	$SVE_ACC3,$SVE_IN01_0,$SVE_R3
 	umlalb	$SVE_ACC0,$SVE_IN01_0,$SVE_R0
 	umlalb	$SVE_ACC4,$SVE_IN01_0,$SVE_R4
 	umlalb	$SVE_ACC1,$SVE_IN01_0,$SVE_R1
 	umlalb	$SVE_ACC2,$SVE_IN01_0,$SVE_R2
 
-	add		$SVE_IN01_3,$SVE_IN01_3,$H3
+	add		$SVE_IN01_3,$SVE_IN01_3,$SVE_H3
 	umlalb	$SVE_ACC3,$SVE_IN01_1,$SVE_R2
 	umlalb	$SVE_ACC0,$SVE_IN01_1,$SVE_S4
 	umlalb	$SVE_ACC4,$SVE_IN01_1,$SVE_R3
 	umlalb	$SVE_ACC1,$SVE_IN01_1,$SVE_R0
 	umlalb	$SVE_ACC2,$SVE_IN01_1,$SVE_R1
 
-	add		$SVE_IN01_4,$SVE_IN01_4,$H4
+	add		$SVE_IN01_4,$SVE_IN01_4,$SVE_H4
 	umlalb	$SVE_ACC3,$SVE_IN01_3,$SVE_R0
 	umlalb	$SVE_ACC0,$SVE_IN01_3,$SVE_S2
 	umlalb	$SVE_ACC4,$SVE_IN01_3,$SVE_R1
@@ -1576,7 +1576,7 @@ poly1305_blocks_sve2_2way:
 	umlalb	$SVE_ACC1,$SVE_IN01_4,$SVE_S2
 	umlalb	$SVE_ACC2,$SVE_IN01_4,$SVE_S3
 
-.Lshort_tail:
+.Lshort_tail_sve2_2way:
 	////////////////////////////////////////////////////////////////
 	// horizontal add
 
@@ -1596,40 +1596,42 @@ poly1305_blocks_sve2_2way:
 	////////////////////////////////////////////////////////////////
 	// lazy reduction, but without narrowing
 
-	ushr	d29,d22,#26
-	and		d22,d22,d31
-	ushr	d30,d19,#26
-	and		d19,d19,d31
+	// Since results were accumulated in the lower 64 bits, I can refer to them as FP/aSIMD reg-s.
 
-	add 	d23,d23,d29  // h3 -> h4
-	add 	d20,d20,d30  // h0 -> h1
+	ushr	d29,d22,#26
+	and		v22.8b,v22.8b,v31.8b
+	ushr	d30,d19,#26
+	and		v19.8b,v19.8b,v31.8b
+
+	add 	d23,d23,d29				// h3 -> h4
+	add 	d20,d20,d30				// h0 -> h1
 
 	ushr	d29,d23,#26
-	and 	d23,d23,d31
+	and		v23.8b,v23.8b,v31.8b
 	ushr	d30,d20,#26
-	and 	d20,d20,d31
-	and 	d21,d21,d30  //h1 -> h2
+	and		v20.8b,v20.8b,v31.8b
+	and		v21.8b,v21.8b,v30.8b	// h1 -> h2
 
 	add 	d19,d19,d29
 	shl 	d29,d29,#2
 	ushr	d30,d21,#26
-	and 	d21,d21,d31
-	add 	d19,d19,d29  // h4 -> h0
-	add 	d22,d22,d30  // h2 -> h3
+	and		v21.8b,v21.8b,v31.8b
+	add 	d19,d19,d29				// h4 -> h0
+	add 	d22,d22,d30				// h2 -> h3
 
     ushr	d29,d19,#26
-	and 	d19,d19,d31
+	and		v19.8b,v19.8b,v31.8b
 	ushr 	d30,d22,#26
-	and 	d22,d22,d31
-	add 	d20,d20,d29  // h0 -> h1
-	add 	d23,d23,d30  // h3 -> h4
+	and		v22.8b,v22.8b,v31.8b
+	add 	d20,d20,d29				// h0 -> h1
+	add 	d23,d23,d30				// h3 -> h4
 
 	////////////////////////////////////////////////////////////////
 	// write the result, can be partially reduced
 
-	stp 	s19,s20,[#ctx],8
-	stp 	s21,s22,[#ctx],8
-	str 	s23,[#ctx]
+	stp 	s19,s20,[$ctx],8
+	stp 	s21,s22,[$ctx],8
+	str 	s23,[$ctx]
 	
 .Lno_data_sve2_2way:
 	ldr	x29,[sp],#80
