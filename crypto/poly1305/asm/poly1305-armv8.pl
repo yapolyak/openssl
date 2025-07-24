@@ -1610,7 +1610,7 @@ poly1305_blocks_sve2_2way:
 	and		v23.8b,v23.8b,v31.8b
 	ushr	d30,d20,#26
 	and		v20.8b,v20.8b,v31.8b
-	and		v21.8b,v21.8b,v30.8b	// h1 -> h2
+	add		d21,d21,d30				// h1 -> h2
 
 	add 	d19,d19,d29
 	shl 	d29,d29,#2
@@ -1629,8 +1629,8 @@ poly1305_blocks_sve2_2way:
 	////////////////////////////////////////////////////////////////
 	// write the result, can be partially reduced
 
-	stp 	s19,s20,[$ctx],8
-	stp 	s21,s22,[$ctx],8
+	stp 	s19,s20,[$ctx],#8
+	stp 	s21,s22,[$ctx],#8
 	str 	s23,[$ctx]
 	
 .Lno_data_sve2_2way:
