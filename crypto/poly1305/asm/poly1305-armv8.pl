@@ -1438,51 +1438,38 @@ poly1305_blocks_sve2_2way:
 	// lazy reduction as discussed in "NEON crypto" by D.J. Bernstein
 	// and P. Schwabe
 
-	// Porting from Neon results in 37 vs 28 original instructions...
-
-	eor		z24.d,z24.d,z24.d					// using SVE_H0 as a tmp 0-val vector
-	mov 	x10,#0x03ffffff						// a scalar mask to `dup` into vectors
-
 	lsr		${SVE_T0}.d,$SVE_ACC3,#26
 	trn1	$SVE_H3,z22.s,z24.s					// reproducing Neon's `xtn` - treat ACC3 as a .s vector
 	lsr		${SVE_T1}.d,$SVE_ACC0,#26
 	and 	$SVE_ACC0,$SVE_ACC0,${SVE_MASK}.d
 	add		$SVE_ACC4,$SVE_ACC4,${SVE_T0}.d	    // h3 -> h4
-	// Neon's bic is replaced with mov + dup + and
-	dup 	${SVE_T0}.d,x10						// lat/thpt : 3/1 - should I use another temporary reg - say H0?
-	and 	z27.d,z27.d,${SVE_T0}.d				// refer to SVE_H3 as .d
+	// Neon's bic is replaced with &=$SVE_MASK (because of using even-indexed elements)
+	and 	z27.d,z27.d,${SVE_MASK}.d			// refer to SVE_H3 as .d
 	add		$SVE_ACC1,$SVE_ACC1,${SVE_T1}.d	    // h0 -> h1
 
     lsr		${SVE_T0}.d,$SVE_ACC4,#26
 	trn1	$SVE_H4,z23.s,z24.s					// reproducing Neon's `xtn` - treat ACC4 as a .s vector
     lsr		${SVE_T1}.d,$SVE_ACC1,#26
 	trn1	$SVE_H1,z20.s,z24.s					// reproducing Neon's `xtn` - treat ACC1 as a .s vector
-	dup 	z24.d,x10							// Using H0 as a tmp as can't use T1 or T2 here - is it OK?
-	and 	z28.d,z28.d,z24.d					// refer to SVE_H4 as .d
+	and 	z28.d,z28.d,${SVE_MASK}.d			// refer to SVE_H4 as .d
 	add		$SVE_ACC2,$SVE_ACC2,${SVE_T1}.d	    // h1 -> h2
-	eor		z24.d,z24.d,z24.d                   // nullify H0 - is it needed?
 
 	add		$SVE_ACC0,$SVE_ACC0,${SVE_T0}.d
 	lsl 	${SVE_T0}.d,${SVE_T0}.d,#2
 	shrnb	${SVE_T1}.s,$SVE_ACC2,#26			// check it's OK
 	trn1	$SVE_H2,z21.s,z24.s					// reproducing Neon's `xtn` - treat ACC2 as a .s vector
 	add 	$SVE_ACC0,$SVE_ACC0,${SVE_T0}.d		// h4 -> h0
-	dup 	${SVE_T0}.d,x10
-	and 	z25.d,z25.d,${SVE_T0}.d				// refer to SVE_H1 as .d
+	and 	z25.d,z25.d,${SVE_MASK}.d			// refer to SVE_H1 as .d
 	add 	$SVE_H3,$SVE_H3,${SVE_T1}.s			// h2 -> h3
-	dup 	${SVE_T1}.d,x10
-	and 	z26.d,z26.d,${SVE_T1}.d				// refer to SVE_H2 as .d
+	and 	z26.d,z26.d,${SVE_MASK}.d			// refer to SVE_H2 as .d
 
     shrnb	${SVE_T0}.s,$SVE_ACC0,#26
 	trn1	$SVE_H0,z19.s,z24.s					// reproducing Neon's `xtn` - treat ACC0 as a .s vector - re-writing H0 here...
     lsr 	${SVE_T1}.s,$SVE_H3,#26
-	//re-ordered below - check if OK
+	and 	z27.d,z27.d,${SVE_MASK}.d			// refer to SVE_H3 as .d
 	add		$SVE_H1,$SVE_H1,${SVE_T0}.s			// h0 -> h1
+	and 	z24.d,z24.d,${SVE_MASK}.d			// refer to SVE_H0 as .d
 	add		$SVE_H4,$SVE_H4,${SVE_T1}.s			// h3 -> h4
-	dup 	${SVE_T0}.d,x10
-	and 	z27.d,z27.d,${SVE_T0}.d				// refer to SVE_H3 as .d
-	dup 	${SVE_T1}.d,x10
-	and 	z24.d,z24.d,${SVE_T1}.d				// refer to SVE_H0 as .d
 
 	b.hi	.Loop_sve2_2way
 
