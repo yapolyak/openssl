@@ -1089,14 +1089,14 @@ poly1305_blocks_sve2_2way:
 	eor 	z27.d,z27.d,z27.d  // H3
 	eor 	z28.d,z28.d,z28.d  // H4
 
-	// `insr` has latency 5 and throughput 1...
-	//  alternative: ptrue to set preds and cpy (but same latency and throughput).
-	//  Could just use Neon's fmov here, but keeping SVE2 instructions here for future 256-bit generalisation
-    insr    $SVE_H0, w10
-    insr    $SVE_H1, w11
-    insr    $SVE_H2, w12
-    insr    $SVE_H3, w13
-    insr    $SVE_H4, w14
+	// Usingh Neon's fmov here for speed.
+	//  We only need the low 26 bits in the first step so no need for post-mov reshuffle.
+	//  When extending to 4-way (256-bit version), insr + zip1 would be needed afterwards I assume.
+	fmov	d24,x10		// H0
+	fmov	d25,x11		// H1
+	fmov	d26,x12		// H2
+	fmov	d27,x13		// H3
+	fmov	d28,x14		// H4
 
 	////////////////////////////////// initialize r^n table
 	mov	$h0,$r0			// r^1
@@ -1149,14 +1149,14 @@ poly1305_blocks_sve2_2way:
 	eor 	z27.d,z27.d,z27.d  // H3
 	eor 	z28.d,z28.d,z28.d  // H4
 
-	// `insr` has latency 5 and throughput 1...
-	//  alternative: ptrue to set preds and cpy (but same latency and throughput).
-	//  Could just use Neon's fmov here, but keeping SVE2 instructions here for future 256-bit generalisation
-    insr    $SVE_H0, w10
-    insr    $SVE_H1, w11
-    insr    $SVE_H2, w12
-    insr    $SVE_H3, w13
-    insr    $SVE_H4, w14
+	// Usingh Neon's fmov here for speed.
+	//  We only need the low 26 bits in the first step so no need for post-mov reshuffle.
+	//  When extending to 4-way (256-bit version), insr + zip1 would be needed afterwards I assume.
+	fmov	d24,x10		// H0
+	fmov	d25,x11		// H1
+	fmov	d26,x12		// H2
+	fmov	d27,x13		// H3
+	fmov	d28,x14		// H4
 
 .Ldo_sve2_2way:
 	ldp	x8,x12,[$in2],#16	// inp[2:3] (or zero)
