@@ -127,35 +127,10 @@ poly1305_init:
 	ret
 .size	poly1305_init,.-poly1305_init
 
-.type	poly1305_blocks,%function
+.type	poly1305_mult,%function
 .align	5
-poly1305_blocks:
-.Lpoly1305_blocks:
-	// The symbol .Lpoly1305_blocks is not a .globl symbol
-	// but a pointer to it is returned by poly1305_init
-	AARCH64_VALID_CALL_TARGET
-	ands	$len,$len,#-16
-	b.eq	.Lno_data
-
-	ldp	$h0,$h1,[$ctx]		// load hash value
-	ldp	$r0,$r1,[$ctx,#32]	// load key value
-	ldr	$h2,[$ctx,#16]
-	add	$s1,$r1,$r1,lsr#2	// s1 = r1 + (r1 >> 2)
-	b	.Loop
-
-.align	5
-.Loop:
-	ldp	$t0,$t1,[$inp],#16	// load input
-	sub	$len,$len,#16
-#ifdef	__AARCH64EB__
-	rev	$t0,$t0
-	rev	$t1,$t1
-#endif
-	adds	$h0,$h0,$t0		// accumulate input
-	adcs	$h1,$h1,$t1
-
+poly1305_mult:
 	mul	$d0,$h0,$r0		// h0*r0
-	adc	$h2,$h2,$padbit
 	umulh	$d1,$h0,$r0
 
 	mul	$t0,$h1,$s1		// h1*5*r1
@@ -186,12 +161,50 @@ poly1305_blocks:
 	adcs	$h1,$d1,xzr
 	adc	$h2,$h2,xzr
 
+	ret
+.size	poly1305_mult,.-poly1305_mult
+
+.type	poly1305_blocks,%function
+.align	5
+poly1305_blocks:
+.Lpoly1305_blocks:
+	// The symbol .Lpoly1305_blocks is not a .globl symbol
+	// but a pointer to it is returned by poly1305_init
+	AARCH64_VALID_CALL_TARGET
+	stp	x29,x30,[sp,#-16]!
+    mov	x29,sp
+
+	ands	$len,$len,#-16
+	b.eq	.Lno_data
+
+	ldp	$h0,$h1,[$ctx]		// load hash value
+	ldp	$r0,$r1,[$ctx,#32]	// load key value
+	ldr	$h2,[$ctx,#16]
+	add	$s1,$r1,$r1,lsr#2	// s1 = r1 + (r1 >> 2)
+	b	.Loop
+
+.align	5
+.Loop:
+	ldp	$d0,$d1,[$inp],#16	// load input
+	sub	$len,$len,#16
+#ifdef	__AARCH64EB__
+	rev	$d0,$d0
+	rev	$d1,$d1
+#endif
+	adds	$h0,$h0,$d0		// accumulate input
+	adcs	$h1,$h1,$d1
+
+	adc	$h2,$h2,$padbit
+
+	bl	poly1305_mult
+
 	cbnz	$len,.Loop
 
 	stp	$h0,$h1,[$ctx]		// store hash value
 	str	$h2,[$ctx,#16]
 
 .Lno_data:
+	ldp	x29,x30,[sp],#16
 	ret
 .size	poly1305_blocks,.-poly1305_blocks
 
@@ -241,43 +254,6 @@ my ($in2,$zeros)=("x16","x17");
 my $is_base2_26 = $zeros;		# borrow
 
 $code.=<<___;
-.type	poly1305_mult,%function
-.align	5
-poly1305_mult:
-	mul	$d0,$h0,$r0		// h0*r0
-	umulh	$d1,$h0,$r0
-
-	mul	$t0,$h1,$s1		// h1*5*r1
-	umulh	$t1,$h1,$s1
-
-	adds	$d0,$d0,$t0
-	mul	$t0,$h0,$r1		// h0*r1
-	adc	$d1,$d1,$t1
-	umulh	$d2,$h0,$r1
-
-	adds	$d1,$d1,$t0
-	mul	$t0,$h1,$r0		// h1*r0
-	adc	$d2,$d2,xzr
-	umulh	$t1,$h1,$r0
-
-	adds	$d1,$d1,$t0
-	mul	$t0,$h2,$s1		// h2*5*r1
-	adc	$d2,$d2,$t1
-	mul	$t1,$h2,$r0		// h2*r0
-
-	adds	$d1,$d1,$t0
-	adc	$d2,$d2,$t1
-
-	and	$t0,$d2,#-4		// final reduction
-	and	$h2,$d2,#3
-	add	$t0,$t0,$d2,lsr#2
-	adds	$h0,$d0,$t0
-	adcs	$h1,$d1,xzr
-	adc	$h2,$h2,xzr
-
-	ret
-.size	poly1305_mult,.-poly1305_mult
-
 .type	poly1305_splat,%function
 .align	5
 poly1305_splat:
@@ -1645,6 +1621,8 @@ poly1305_blocks_sve2_2way:
 	AARCH64_VALIDATE_LINK_REGISTER
 	ret
 .size	poly1305_blocks_sve2_2way,.-poly1305_blocks_sve2_2way
+
+
 
 .rodata
 
