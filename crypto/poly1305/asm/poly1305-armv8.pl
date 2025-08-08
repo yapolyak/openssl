@@ -111,8 +111,8 @@ poly1305_init:
 
 	tst w17, #ARMV8_SVE2
 
-	adrp	$r0,poly1305_blocks_sve2_2way
-	add	$r0,$r0,#:lo12:.Lpoly1305_blocks_sve2_2way
+	adrp	$r0,poly1305_blocks_sve2
+	add	$r0,$r0,#:lo12:.Lpoly1305_blocks_sve2
 
 	csel	$d0,$d0,$r0,eq
 
@@ -944,113 +944,112 @@ my ($SVE_ACC0,$SVE_ACC1,$SVE_ACC2,$SVE_ACC3,$SVE_ACC4) = map("z$_.d",(19..23));
 my ($SVE_H0,$SVE_H1,$SVE_H2,$SVE_H3,$SVE_H4) = map("z$_.s",(24..28));
 my ($SVE_T0,$SVE_T1,$SVE_MASK) = map("z$_",(29..31));
 
+my ($vl,$vl0,$vl1,$vl2,$vl3,$vl4) = ("x15",$h0,$h1,$h2,$r0,$r1);
+
 $code.=<<___;
-.type	poly1305_blocks_sve2_2way,%function
+.type	poly1305_blocks_sve2,%function
 .align	5
-poly1305_blocks_sve2_2way:
-.Lpoly1305_blocks_sve2_2way:
+poly1305_blocks_sve2:
+.Lpoly1305_blocks_sve2:
 	AARCH64_VALID_CALL_TARGET
 	ldr	$is_base2_26,[$ctx,#24]
-	cmp	$len,#128
-	b.hs	.Lblocks_sve2_2way
-	cbz	$is_base2_26,.Lpoly1305_blocks	// branch to scalar code, but only if not in base 2^26 already
+	// Estimate vector width and branch to scalar if input too short
+	cntd	$vl				// vector width in 64-bit lanes (vl)
+	lsl	$vl0,$vl,#4			// vl * 16 (bytes per vector input blocks) 
+	mov $vl1,$vl0,lsl #2	// 4 * vl * 16
+	//add $t1,$t0,$t0,lsl #1	// 3 * vl * 16 
+	cmp	$len,$vl1
+	b.hs	.Lblocks_sve2
+	cbz	$is_base2_26,.Lpoly1305_blocks	// if in base 2^26 - proceed
 
-.Lblocks_sve2_2way:      // This is all exactly the same as in the Neon case (with some extra comments)
+.Lblocks_sve2:
 	AARCH64_SIGN_LINK_REGISTER
 	stp	x29,x30,[sp,#-80]!
 	add	x29,sp,#0
 
 	ands	$len,$len,#-16
-	b.eq	.Lno_data_sve2_2way
+	b.eq	.Lno_data_sve2
 
-	cbz	$is_base2_26,.Lbase2_64_sve2_2way
+	cbz	$is_base2_26,.Lbase2_64_sve2
 
-	ldp	w10,w11,[$ctx]		// load hash value base 2^26
+	ldp	w10,w11,[$ctx]			// load hash value base 2^26
 	ldp	w12,w13,[$ctx,#8]
 	ldr	w14,[$ctx,#16]
 
-	tst	$len,#31	// Take care of the first term (proceed if there is an odd number of terms, branch if even)
-	b.eq	.Leven_sve2_2way
+	neg	$vl1,$vl0				// - (vl * 16)
+	sub	$vl0,$vl0,#1			// (vl * 16) - 1
+	and	$vl2,$len,$vl1			// $len - ($len % (vl * 16)) -> VLA length
+	and	$vl4,$len,$vl0			// $len % (vl * 16) -> scalar remainder
+	cbz	$vl4,.Leven_sve2		// If no scalar "head", proceed to VLA
+	add	$vl3,$inp,$vl4			// Pointer to the start of the VLA data
+	stp	$vl2,$vl3,[sp,#-16]!	// Backup VLA length and ptr
+	mov	$len,$vl4				// So that scalar part knows it's length
 
-	ldp	$r0,$r1,[$ctx,#32]	// load key value
-
-	add	$h0,x10,x11,lsl#26	// base 2^26 -> base 2^64
+	add	$h0,x10,x11,lsl#26		// base 2^26 -> base 2^64
 	lsr	$h1,x12,#12
 	adds	$h0,$h0,x12,lsl#52
 	add	$h1,$h1,x13,lsl#14
 	adc	$h1,$h1,xzr
 	lsr	$h2,x14,#24
 	adds	$h1,$h1,x14,lsl#40
-	adc	$d2,$h2,xzr		// can be partially reduced...
+	adc	$d2,$h2,xzr				// can be partially reduced...
 
-	ldp	$d0,$d1,[$inp],#16	// load input
-	sub	$len,$len,#16
-	add	$s1,$r1,$r1,lsr#2	// s1 = r1 + (r1 >> 2)
-
-	and	$t0,$d2,#-4		// ... so reduce
+	and	$t0,$d2,#-4				// ... so reduce
 	and	$h2,$d2,#3
 	add	$t0,$t0,$d2,lsr#2
 	adds	$h0,$h0,$t0
 	adcs	$h1,$h1,xzr
 	adc	$h2,$h2,xzr
 
-#ifdef	__AARCH64EB__
-	rev	$d0,$d0
-	rev	$d1,$d1
-#endif
-	adds	$h0,$h0,$d0		// accumulate input
-	adcs	$h1,$h1,$d1
-	adc	$h2,$h2,$padbit
+	stp	$h0,$h1,[$ctx]			// store hash value base 2^64
+	str	$h2,[$ctx,#16]
 
-	bl	poly1305_mult
+	bl	poly1305_blocks
+	ldp	$len,$inp,[sp],#16		// Recover updated length and input ptr
 	ldr	x30,[sp,#8]
 
-	cbz	$padbit,.Lstore_base2_64_sve2_2way
+	cbz	$padbit,.Lzero_padbit_sve2	// hash already stored in poly1305_blocks
 
-	and	x10,$h0,#0x03ffffff	// base 2^64 -> base 2^26
+	ldp	$h0,$h1,[$ctx]			// load hash value base 2^64
+	ldr $h2,[$ctx,#16]
+
+	and	x10,$h0,#0x03ffffff		// base 2^64 -> base 2^26
 	ubfx	x11,$h0,#26,#26
 	extr	x12,$h1,$h0,#52
 	and	x12,x12,#0x03ffffff
 	ubfx	x13,$h1,#14,#26
 	extr	x14,$h2,$h1,#40
 
-	cbnz	$len,.Leven_sve2_2way
+	cbnz	$len,.Leven_sve2	// never happens?
 
-	stp	w10,w11,[$ctx]		// store hash value base 2^26
+	stp	w10,w11,[$ctx]			// store hash value base 2^26
 	stp	w12,w13,[$ctx,#8]
 	str	w14,[$ctx,#16]
-	b	.Lno_data_sve2_2way
+	b	.Lno_data_sve2
 
 .align	4
-.Lstore_base2_64_sve2_2way:
-	stp	$h0,$h1,[$ctx]		// store hash value base 2^64
-	stp	$h2,xzr,[$ctx,#16]	// note that is_base2_26 is zeroed
-	b	.Lno_data_sve2_2way
+.Lzero_padbit_sve2:
+	str	xzr,[$ctx,#24]
+	b	.Lno_data_sve2
 
 .align	4
-.Lbase2_64_sve2_2way:
+.Lbase2_64_sve2:
+	neg	$vl1,$vl0				// - (vl * 16)
+	sub	$vl0,$vl0,#1			// (vl * 16) - 1
+	and	$vl2,$len,$vl1			// $len - ($len % (vl * 16)) -> VLA length
+	and	$vl4,$len,$vl0			// $len % (vl * 16) -> scalar remainder
+	cbz	$vl4,.Linit_sve2		// If no scalar "head", proceed to VLA
+	add	$vl3,$inp,$vl4			// Pointer to the start of the VLA data
+	stp	$vl2,$vl3,[sp,#-16]!	// Backup VLA length and ptr
+	mov	$len,$vl4				// So that scalar part knows it's length
+	bl	poly1305_blocks			// Calculate the scalar "head"
+	ldp	$len,$inp,[sp],#16		// Recover updated length and input ptr
+
+.Linit_sve2:
 	ldp	$r0,$r1,[$ctx,#32]	// load key value
-
 	ldp	$h0,$h1,[$ctx]		// load hash value base 2^64
-	ldr	$h2,[$ctx,#16]
+	ldr $h2,[$ctx,#16]
 
-	tst	$len,#31
-	b.eq	.Linit_sve2_2way
-
-	ldp	$d0,$d1,[$inp],#16	// load input
-	sub	$len,$len,#16
-	add	$s1,$r1,$r1,lsr#2	// s1 = r1 + (r1 >> 2)
-#ifdef	__AARCH64EB__
-	rev	$d0,$d0
-	rev	$d1,$d1
-#endif
-	adds	$h0,$h0,$d0		// accumulate input
-	adcs	$h1,$h1,$d1
-	adc	$h2,$h2,$padbit
-
-	bl	poly1305_mult
-
-.Linit_sve2_2way:
 	and	x10,$h0,#0x03ffffff	// base 2^64 -> base 2^26
 	ubfx	x11,$h0,#26,#26
 	extr	x12,$h1,$h0,#52
@@ -1114,7 +1113,7 @@ poly1305_blocks_sve2_2way:
 	b	.Ldo_sve2_2way
 
 .align	4
-.Leven_sve2_2way:
+.Leven_sve2:
 	add	$in2,$inp,#32
 	adrp	$zeros,.Lzeros
 	add	$zeros,$zeros,:lo12:.Lzeros
@@ -1616,11 +1615,11 @@ poly1305_blocks_sve2_2way:
 	stp 	s21,s22,[$ctx],#8
 	str 	s23,[$ctx]
 	
-.Lno_data_sve2_2way:
+.Lno_data_sve2:
 	ldr	x29,[sp],#80
 	AARCH64_VALIDATE_LINK_REGISTER
 	ret
-.size	poly1305_blocks_sve2_2way,.-poly1305_blocks_sve2_2way
+.size	poly1305_blocks_sve2,.-poly1305_blocks_sve2
 
 
 
