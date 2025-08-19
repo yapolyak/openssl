@@ -265,15 +265,15 @@ poly1305_splat:
 	extr	x16,$h2,$h1,#40
 
 	str	w12,[$ctx,#16*0]	// r0
-	add	w12,w13,w13,lsl#2	// r1*5
+	add	w12,w13,w13,lsl#2	// r1*5 -> s1
 	str	w13,[$ctx,#16*1]	// r1
-	add	w13,w14,w14,lsl#2	// r2*5
+	add	w13,w14,w14,lsl#2	// r2*5 -> s2
 	str	w12,[$ctx,#16*2]	// s1
 	str	w14,[$ctx,#16*3]	// r2
-	add	w14,w15,w15,lsl#2	// r3*5
+	add	w14,w15,w15,lsl#2	// r3*5 -> s3
 	str	w13,[$ctx,#16*4]	// s2
 	str	w15,[$ctx,#16*5]	// r3
-	add	w15,w16,w16,lsl#2	// r4*5
+	add	w15,w16,w16,lsl#2	// r4*5 -> s4
 	str	w14,[$ctx,#16*6]	// s3
 	str	w16,[$ctx,#16*7]	// r4
 	str	w15,[$ctx,#16*8]	// s4
@@ -944,9 +944,124 @@ my ($SVE_ACC0,$SVE_ACC1,$SVE_ACC2,$SVE_ACC3,$SVE_ACC4) = map("z$_.d",(19..23));
 my ($SVE_H0,$SVE_H1,$SVE_H2,$SVE_H3,$SVE_H4) = map("z$_.s",(24..28));
 my ($SVE_T0,$SVE_T1,$SVE_MASK) = map("z$_",(29..31));
 
-my ($vl,$vl0,$vl1,$vl2,$vl3,$vl4) = ("x15",$h0,$h1,$h2,$r0,$r1);
+my ($vl,$vl0,$vl1,$vl2,$vl3,$vl4) = ("x16",$h0,$h1,$h2,$r0,$r1);
+my ($r0,$r1,$r2) = ($r0,$r1,$s1);
+my ($cs0,$cs1,$cs2,$cs3,$cs4,$cs5) = map("x$_",(19..24));
+my ($pwr,$mask) = map("x$_",(25..26));
+my $is_base2_26 = "w17";
 
 $code.=<<___;
+.type	poly1305_sw_2_26,%function
+.align	5
+poly1305_sw_2_26:
+	// Converts 3 base2_44 -> 5 base2_26 values and stores
+    mov		x15,#0x3ffffff			// w15  : 2^26-1 mask
+    and		x10,$r0,x15				// w10 -> r0
+    lsr		x11,$r0,#26				// w11 : top 18 bits of r0
+    str		w10,[x5]				// Store r0
+    bfi		x11,$r1,#18,#8			// w11 -> r1
+    ubfx    x12,$r1,#8,#26			// w12 -> r2
+	add	w10,w11,w11,lsl#2			// calc r1*5 - delete me!
+    //str		w11,[x5,#28]			// Store r1
+    str		w11,[x5,#16*1]			// Store r1 - delete me!
+    str		w10,[x5,#16*2]			// store r1*5 - delete me!
+	add	w11,w12,w12,lsl#2			// calc r2*5 - delete me!
+    lsr		x13,$r1,#34				// w13 : top 10 bits of r1
+    //str		w12,[x5,#56]			// Store r2
+    str		w12,[x5,#16*3]			// Store r2 - delete me!
+    bfi     x13,$r2,#10,#16			// w13 -> r3
+    str		w11,[x5,#16*4]			// store r2*5 - delete me!
+	add	w10,w13,w13,lsl#2			// calc r3*5 - delete me!
+    lsr		x14,$r2,#16				// w14 -> r4
+    //str		w13,[x5,#84]			// Store r3
+    str		w13,[x5,#16*5]			// Store r3 - delete me!
+	add	w11,w14,w14,lsl#2			// calc r4*5 - delete me!
+    str		w10,[x5,#16*6]			// store r3*5 - delete me!
+    //str		w14,[x5,#112]			// Store r4
+    str		w14,[x5,#16*7]			// Store r4 - delete me!
+    str		w11,[x5,#16*8]			// store r4*5 - delete me!
+    ret
+.size   poly1305_sw_2_26,.-poly1305_sw_2_26
+
+.type	poly1305_sqr_2_44,%function
+.align	5
+poly1305_sqr_2_44:
+	// Calculates base2_44 squaring operation.
+
+    // Pre-calculate constants and doubled terms.
+	mov		x12,#20
+	lsl		x13,$r1,#1		// x13 = r1 * 2
+	mul		x12,$r2,x12		// x12 = r2 * 20
+	lsl		x10,$r0,#1		// x10 = r0 * 2
+
+    // --- Calculate d2 = r1*r1 + 2*r0*r2 ---
+	umulh	$cs5,$r1,$r1	// high part of r1*r1
+	mul		$cs4,$r1,$r1	// low part of r1*r1
+	umulh	x15,x10,$r2		// high part of (r0*2)*r2 - ?OK to use x15?
+	mul		x14,x10,$r2		// low part of (r0*2)*r2
+
+    // --- Calculate d0 = r0*r0 + 20*(2*r1*r2) ---
+	umulh	$cs1,$r0,$r0	// high part of r0*r0
+	mul		$cs0,$r0,$r0	// low part of r0*r0
+	umulh	x11,x13,x12		// high part of (r1*2)*(r2*20)
+	mul		x10,x13,x12		// low part of (r1*2)*(r2*20)
+
+	adds	$cs4,$cs4,x14	// d2_lo
+	adc		$cs5,$cs5,x15	// d2_hi
+
+    // --- Calculate d1 = 2*r0*r1 + 20*r2*r2 ---
+    // d1 is a 128-bit result stored in x7:x6 (hi:lo)
+	umulh	$cs3,$r0,x13	// high part of r0*(r1*2)
+	mul		$cs2,$r0,x13	// low part of r0*(r1*2)
+	umulh	x13,$r2,x12		// high part of r2*(r2*20)
+	mul		x12,$r2,x12		// low part of r2*(r2*20)
+
+	adds	$cs0,$cs0,x10	// d0_lo
+	adc		$cs1,$cs1,x11	// d0_hi
+
+	adds	$cs2,$cs2,x12	// d1_lo
+	adc		$cs3,$cs3,x13	// d1_hi
+
+    // --- Reduction and Carry Propagation ---
+    // Reduce the 128-bit d0, d1, d2 back to three 44-bit limbs in x0, x1, x2
+	lsr		x10,$cs0,#44	// (d0_lo >> 44)
+	lsl		x11,$cs1,#20	// (d0_hi << 20) - high 20 bits are zero
+	and		$r0,$cs0,$mask	// r0 -> d0_lo & mask
+	orr		x10,x10,x11		// x10 -> 64-bit carry from d0
+    
+	lsr		x12,$cs2,#44	// (d1_hi >> 44)
+	lsl		x13,$cs3,#20	// (d1_hi << 20)
+	and		$r1,$cs2,$mask	// r1 -> d1_lo & mask
+	orr		x12,x12,x13		// x12 -> 64-bit carry from d1
+	add		$r1,$r1,x10		// r1 += carry from d0
+
+	lsr		x11,$mask,#2	// x11 -> 2^42-1 mask for d2 reduction
+	lsr		x10,$cs4,#42	// (d2_lo >> 42)
+	lsl		x13,$cs5,#22	// (d2_hi << 22)
+	and		$r2,$cs4,x11	// r2 -> d2_lo & 2^42-1 mask
+	orr		x10,x10,x13		// x10 -> final carry from d2
+	add		$r2,$r2,x12		// r2 += carry from d1
+
+    // Handle ripple-carry from r2 and apply the *5 reduction.
+	lsr		x13,$r2,#42		// Get carry from r2 (if r2 >= 2^42)
+	and		$r2,$r2,x11		// Mask r2 back down to 42 bits
+	add		x10,x10,x13		// Add this ripple-carry to the final carry
+
+	add		x11,x10,x10,lsl #2	// x11 -> final_carry * 5
+	add		$r0,$r0,x11			// r0 += final_carry * 5
+
+    // Final ripple-carry chain to ensure all limbs are 44 bits.
+	lsr		x11,$r1,#44		// Get carry from r1
+	and		$r1,$r1,$mask	// Mask r1 to 44 bits
+	add		$r2,$r2,x11		// r2 += carry from r1
+    
+	lsr		x10,$r0,#44		// Get carry from r0
+	and		$r0,$r0,$mask	// Mask r0 to 44 bits
+	add		$r1,$r1,x10		// r1 += carry from r0
+
+    ret
+.size	poly1305_sqr_2_44,.-poly1305_sqr_2_44
+
 .type	poly1305_blocks_sve2,%function
 .align	5
 poly1305_blocks_sve2:
@@ -964,8 +1079,14 @@ poly1305_blocks_sve2:
 
 .Lblocks_sve2:
 	AARCH64_SIGN_LINK_REGISTER
-	stp	x29,x30,[sp,#-80]!
+	stp	x29,x30,[sp,#-144]!		// Allowing for callee-saved reg-s
 	add	x29,sp,#0
+
+	//Store some callee-saved GPRs
+	stp	x19,x20,[sp,#16]
+ 	stp	x21,x22,[sp,#32]
+ 	stp	x23,x24,[sp,#48]
+	stp	x25,x26,[sp,#64]
 
 	ands	$len,$len,#-16
 	b.eq	.Lno_data_sve2
@@ -1046,7 +1167,63 @@ poly1305_blocks_sve2:
 	ldp	$len,$inp,[sp],#16		// Recover updated length and input ptr
 
 .Linit_sve2:
+	# Calculating and storing powers of `r`.
+	ldr w5,[$ctx,#28]		// Load top power (if exists - 0 by default)
+	//add $pwr,$ctx,#48+28	// Point to the end of powers allocation
+	add $pwr,$ctx,#48+16	// Delete me!
+
+	mov $mask,#-1
+	lsr $mask,$mask,#20		//2^44-1
+
+	cbnz	w5,.Lpwrs_precomputed
+
 	ldp	$r0,$r1,[$ctx,#32]	// load key value
+
+	lsr	$r2,$r1,#24			// base2_64 -> base2_44
+	extr	$r1,$r1,$r0,#44
+	and	$r0,$r0,$mask
+	and	$r1,$r1,$mask
+
+	//mov	x4,$vl		// uncomment me!
+	add	x5,$pwr,#-4
+	bl	poly1305_sw_2_26
+
+	//!!! Remove me later !!!
+	// Calculate r^3 for consistency with old impl.
+	ldp	$r0,$r1,[$ctx,#32]	// re-load key value
+	mov	$h0,$r0				// r^1
+	add	$s1,$r1,$r1,lsr#2	// s1 = r1 + (r1 >> 2) : r1 * (5/4) base2_64
+	mov	$h1,$r1
+	mov	$h2,xzr
+	bl	poly1305_mult		// r^2
+	bl	poly1305_mult		// r^3
+	add	$ctx,$ctx,#48+8
+	bl	poly1305_splat
+	sub	$ctx,$ctx,#48+8		// restore $ctx
+
+	ldp	$r0,$r1,[$ctx,#32]	// re-re-load key value
+
+	lsr	$r2,$r1,#24			// base2_64 -> base2_44
+	extr	$r1,$r1,$r0,#44
+	and	$r0,$r0,$mask
+	and	$r1,$r1,$mask
+
+	cntd	$vl		// x16 is overwritten in poly1305_splat!
+	mov	x4,$vl
+	add	x5,$pwr,#-8
+	//!!! Remove me later !!!
+
+.Loop_pwrs_sqr:
+	lsr	x4,x4,#1
+	add	x5,x5,#-4
+	bl	poly1305_sqr_2_44
+	bl	poly1305_sw_2_26
+	cbnz	 x4,.Loop_pwrs_sqr
+
+	sub	x5,x5,$pwr
+	str	w5,[$ctx,#28]
+
+.Lpwrs_precomputed:
 	ldp	$h0,$h1,[$ctx]		// load hash value base 2^64
 	ldr $h2,[$ctx,#16]
 
@@ -1057,10 +1234,10 @@ poly1305_blocks_sve2:
 	ubfx	x13,$h1,#14,#26
 	extr	x14,$h2,$h1,#40
 
-	stp	d8,d9,[sp,#16]		// meet ABI requirements
-	stp	d10,d11,[sp,#32]
-	stp	d12,d13,[sp,#48]
-	stp	d14,d15,[sp,#64]
+	stp	d8,d9,[sp,#80]		// meet ABI requirements
+	stp	d10,d11,[sp,#96]
+	stp	d12,d13,[sp,#112]
+	stp	d14,d15,[sp,#128]
 
     // Zeroing H0-H4 registers
 	eor 	z24.d,z24.d,z24.d  // H0
@@ -1078,28 +1255,7 @@ poly1305_blocks_sve2:
 	fmov	d27,x13		// H3
 	fmov	d28,x14		// H4
 
-	////////////////////////////////// initialize r^n table
-	// Originally, powers of r were stored as {r^4, r^3, r^2, r} in a vector.
-	// Here, we re-order them as {r^4, r^2, r^3, r} to accommodate for the way umullb/umullt work.
-	mov	$h0,$r0			// r^1
-	add	$s1,$r1,$r1,lsr#2	// s1 = r1 + (r1 >> 2)
-	mov	$h1,$r1
-	mov	$h2,xzr
-	add	$ctx,$ctx,#48+12
-	bl	poly1305_splat
-
-	bl	poly1305_mult		// r^2
-	sub	$ctx,$ctx,#8        // re-ordering original Neon impl. order 
-	bl	poly1305_splat
-
-	bl	poly1305_mult		// r^3
-	add	$ctx,$ctx,#4
-	bl	poly1305_splat
-
-	bl	poly1305_mult		// r^4
-	sub	$ctx,$ctx,#8
-	bl	poly1305_splat
-	ldr	x30,[sp,#8]
+	ldr	x30,[sp,#8]		// Should I do this earlier after r^x calcs?
 
 	add	$in2,$inp,#32
 	adrp	$zeros,.Lzeros
@@ -1108,8 +1264,7 @@ poly1305_blocks_sve2:
 	csel	$in2,$zeros,$in2,lo
 
 	mov	x4,#1
-	stur	x4,[$ctx,#-24]		// set is_base2_26
-	sub	$ctx,$ctx,#48		// restore original $ctx
+	stur	x4,[$ctx,#24]		// set is_base2_26
 	b	.Ldo_sve2_2way
 
 .align	4
@@ -1120,10 +1275,10 @@ poly1305_blocks_sve2:
 	subs	$len,$len,#64
 	csel	$in2,$zeros,$in2,lo
 
-	stp	d8,d9,[sp,#16]		// meet ABI requirements
-	stp	d10,d11,[sp,#32]
-	stp	d12,d13,[sp,#48]
-	stp	d14,d15,[sp,#64]
+	stp	d8,d9,[sp,#80]		// meet ABI requirements
+	stp	d10,d11,[sp,#96]
+	stp	d12,d13,[sp,#112]
+	stp	d14,d15,[sp,#128]
 
 	eor 	z24.d,z24.d,z24.d  // H0
 	eor 	z25.d,z25.d,z25.d  // H1
@@ -1566,13 +1721,13 @@ poly1305_blocks_sve2:
 	//Here and below I use hard-coded FP registers.
 
 	uaddv   d22, p0, $SVE_ACC3
-	 ldp	d8,d9,[sp,#16]		// meet ABI requirements
+	 ldp	d8,d9,[sp,#80]		// meet ABI requirements
 	uaddv   d19, p0, $SVE_ACC0
-	 ldp	d10,d11,[sp,#32]
+	 ldp	d10,d11,[sp,#96]
 	uaddv   d23, p0, $SVE_ACC4
-	 ldp	d12,d13,[sp,#48]
+	 ldp	d12,d13,[sp,#112]
 	uaddv   d20, p0, $SVE_ACC1
-	 ldp	d14,d15,[sp,#64]
+	 ldp	d14,d15,[sp,#128]
 	uaddv   d21, p0, $SVE_ACC2
 
 	////////////////////////////////////////////////////////////////
@@ -1616,7 +1771,12 @@ poly1305_blocks_sve2:
 	str 	s23,[$ctx]
 	
 .Lno_data_sve2:
-	ldr	x29,[sp],#80
+	// Restore the callee-saved GPRs
+	ldp	x19,x20,[sp,#16]
+	ldp	x21,x22,[sp,#32]
+	ldp	x23,x24,[sp,#48]
+	ldp	x25,x26,[sp,#64]
+	ldr	x29,[sp],#144
 	AARCH64_VALIDATE_LINK_REGISTER
 	ret
 .size	poly1305_blocks_sve2,.-poly1305_blocks_sve2
