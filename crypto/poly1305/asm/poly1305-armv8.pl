@@ -1257,24 +1257,12 @@ poly1305_blocks_sve2:
 
 	ldr	x30,[sp,#8]		// Should I do this earlier after r^x calcs?
 
-	add	$in2,$inp,#32
-	adrp	$zeros,.Lzeros
-	add	$zeros,$zeros,:lo12:.Lzeros
-	subs	$len,$len,#64
-	csel	$in2,$zeros,$in2,lo
-
 	mov	x4,#1
 	stur	x4,[$ctx,#24]		// set is_base2_26
 	b	.Ldo_sve2_2way
 
 .align	4
 .Leven_sve2:
-	add	$in2,$inp,#32
-	adrp	$zeros,.Lzeros
-	add	$zeros,$zeros,:lo12:.Lzeros
-	subs	$len,$len,#64
-	csel	$in2,$zeros,$in2,lo
-
 	stp	d8,d9,[sp,#80]		// meet ABI requirements
 	stp	d10,d11,[sp,#96]
 	stp	d12,d13,[sp,#112]
@@ -1293,71 +1281,15 @@ poly1305_blocks_sve2:
 	fmov	d28,x14		// H4
 
 .Ldo_sve2_2way:
-	ldp	x8,x12,[$in2],#16	// inp[2:3] (or zero)
-	ldp	x9,x13,[$in2],#48
+    ptrue   p0.b, ALL               		// Set all-true predicate
 
-	lsl	$padbit,$padbit,#24
-	add	x15,$ctx,#48
-
-    ptrue   p0.b, ALL               // Set all-true predicate
-
-#ifdef	__AARCH64EB__
-	rev	x8,x8
-	rev	x12,x12
-	rev	x9,x9
-	rev	x13,x13
-#endif
-
-	// Below I use original 2x32-bit -> 64-bit packing + fmov + zip1 to spread values to even lanes.
-	// Requires an additional all-zero mask, which adds three extra instructions in lazy reduction. 
-	// Could be better interleaved I guess?
-
-	eor 	${SVE_MASK}.d,${SVE_MASK}.d,${SVE_MASK}.d	// set zero mask
-
-	and 	x4, x8, #0x03ffffff         // w4 = limb 0 from stream 0 (inp[2])
-	and 	x5, x9, #0x03ffffff         // w5 = limb 0 from stream 1 (inp[3])
-	add 	x4,x4,x5,lsl#32
-	fmov	d14,x4						// Refer to SVE_IN23_0 as FP register
-
-	ubfx	x6, x8, #26, #26            // w6 = limb 1 from stream 0 (inp[2])
-	ubfx	x7, x9, #26, #26            // w7 = limb 1 from stream 1 (inp[3])
-	add 	x6,x6,x7,lsl#32
-
-	zip1	$SVE_IN23_0,$SVE_IN23_0,${SVE_MASK}.s	// Put values into even-indexed lanes
-	fmov	d15,x6						// Refer to SVE_IN23_1 as FP register
-
-	extr	x8, x12, x8, #52            // Reconstruct bits for limb 2 from stream 0
-	extr	x9, x13, x9, #52            // Reconstruct bits for limb 2 from stream 1
-	and 	x8, x8, #0x03ffffff         // w8 = limb 2 from stream 0
-	and 	x9, x9, #0x03ffffff         // w9 = limb 2 from stream 1
-	add 	x8,x8,x9,lsl#32
-
-	zip1	$SVE_IN23_1,$SVE_IN23_1,${SVE_MASK}.s	// Put values into even-indexed lanes
-	fmov	d16,x8						// Refer to SVE_IN23_2 as FP register
-
-	ubfx	x10, x12, #14, #26          // w10 = limb 3 from stream 0
-	ubfx	x11, x13, #14, #26          // w11 = limb 3 from stream 1
-	add 	x10,x10,x11,lsl#32
-
-	zip1	$SVE_IN23_2,$SVE_IN23_2,${SVE_MASK}.s	// Put values into even-indexed lanes
-	fmov	d17,x10						// Refer to SVE_IN23_3 as FP register
-
-	add 	x12,$padbit,x12,lsr#40      // w12 = limb 4 from stream 0
-	add 	x13,$padbit,x13,lsr#40      // w13 = limb 4 from stream 1
-	add 	x12,x12,x13,lsl#32
-
-	zip1	$SVE_IN23_3,$SVE_IN23_3,${SVE_MASK}.s	// Put values into even-indexed lanes
-	fmov	d18,x12						// Refer to SVE_IN23_4 as FP register
-	zip1	$SVE_IN23_4,$SVE_IN23_4,${SVE_MASK}.s	// Put values into even-indexed lanes
-
-	ldp 	x8,x12,[$inp],#16	        // inp[0:1]
-	ldp 	x9,x13,[$inp],#48
-
+	// Load r-powers.
 	// while LD4W { <Zt1>.S, <Zt2>.S, <Zt3>.S, <Zt4>.S }, <Pg>/Z, [<Xn|SP>{, #<imm>, MUL VL}]
 	// exists in FEAT_SVE, it de-interleaves - one would need to re-write poly1305_splat.
 	// Contiguous load exists in FEAT_SVE2v1, this should be possible in the future:
 	// LD1W { <Zt1>.S-<Zt2>.S }, <PNg>/Z, [<Xn|SP>{, #<imm>, MUL VL}]
 	// For now will have to live with the following:
+	add	x15,$ctx,#48
 	ld1w	{ $SVE_R0 }, p0/z, [x15]            
 	ld1w	{ $SVE_R1 }, p0/z, [x15, #1, MUL VL]
 	ld1w	{ $SVE_S1 }, p0/z, [x15, #2, MUL VL]
@@ -1369,48 +1301,61 @@ poly1305_blocks_sve2:
 	add 	x15, x15, #128     // [x15, #8, MUL VL] would be out of bounds..
 	ld1w	{ $SVE_S4 }, p0/z, [x15]
 
-#ifdef	__AARCH64EB__
-	rev	x8,x8
-	rev	x12,x12
-	rev	x9,x9
-	rev	x13,x13
+	// Load initial input blocks
+	lsr		x15,$len,#4
+	whilelo	p1.s,xzr,x15					// Set predicate for blocks loading
+	lsl	$padbit,$padbit,#24
+	ld4w	{ z9.s-z12.s },p1/z,[$inp]		// Loading all blocks at once
+
+#ifdef  __AARCH64EB__
+	revb	z9.s,  p0/m, z9.s
+	revb	z10.s, p0/m, z10.s
+	revb	z11.s, p0/m, z11.s
+	revb	z12.s, p0/m, z12.s
 #endif
 
-	and 	x4, x8, #0x03ffffff         // w4 = limb 0 from stream 0 (inp[2])
-	and 	x5, x9, #0x03ffffff         // w5 = limb 0 from stream 1 (inp[3])
-	add 	x4,x4,x5,lsl#32
-	fmov	d9,x4						// Refer to SVE_IN01_0 as FP register
+	// In-vector (VLA) conversion base2_64 -> base2_26.
+	dup 	${SVE_MASK}.s,#-1
+	lsr 	${SVE_MASK}.s,${SVE_MASK}.s,#6
 
-	ubfx	x6, x8, #26, #26            // w6 = limb 1 from stream 0 (inp[2])
-	ubfx	x7, x9, #26, #26            // w7 = limb 1 from stream 1 (inp[3])
-	add 	x6,x6,x7,lsl#32
+	lsr		${SVE_T0}.s,z11.s,#14		// T0 -> z11 >> 14
+	lsr		z13.s,z12.s,#8				// z13 -> l4
+	lsl		z12.s,z12.s,#18				// z12 -> upper part of l3
+	orr		z12.d,z12.d,${SVE_T0}.d		// z12 -> final l3
+	lsl		z11.s,z11.s,#12				// z11 -> upper part of l2
+	lsr		${SVE_T1}.s,z10.s,#20		// T1 -> z10 >> 20
+	lsl		z10.s,z10.s,#6				// z10 -> upper part of l1
+	lsr		${SVE_T0}.s,z9.s,#26		// T0 -> z9 >> 26
+	and		z9.d,z9.d,${SVE_MASK}.d		// z0 is now final l0
+	orr		z11.d,z11.d,${SVE_T1}.d		// z11 -> final l2
+	orr		z10.d,z10.d,${SVE_T0}.d		// z10 -> final l1
 
-	zip1	$SVE_IN01_0,$SVE_IN01_0,${SVE_MASK}.s	// Put values into even-indexed lanes
-	fmov	d10,x6						// Refer to SVE_IN01_1 as FP register
+	dup		${SVE_T1}.s,w3				// x3 -> $padbit but need it as a word
 
-	extr	x8, x12, x8, #52            // Reconstruct bits for limb 2 from stream 0
-	extr	x9, x13, x9, #52            // Reconstruct bits for limb 2 from stream 1
-	and 	x8, x8, #0x03ffffff         // w8 = limb 2 from stream 0
-	and 	x9, x9, #0x03ffffff         // w9 = limb 2 from stream 1
-	add 	x8,x8,x9,lsl#32
+	orr		z13.d,z13.d,${SVE_T1}.d		// l4 += padbit
+	and		z12.d,z12.d,${SVE_MASK}.d	// Mask l3
+	and		z11.d,z11.d,${SVE_MASK}.d	// Mask l2
+	and		z10.d,z10.d,${SVE_MASK}.d	// Mask l1
 
-	zip1	$SVE_IN01_1,$SVE_IN01_1,${SVE_MASK}.s	// Put values into even-indexed lanes
-	fmov	d11,x8						// Refer to SVE_IN01_2 as FP register
+	// Now distribute interleaving blocks to two sets of vector registers
+	// I guess I could use T0 as mask and interleave below with above somewhat
+	eor 	${SVE_T0}.d,${SVE_T0}.d,${SVE_T0}.d	// set zero mask
 
-	ubfx	x10, x12, #14, #26          // w10 = limb 3 from stream 0
-	ubfx	x11, x13, #14, #26          // w11 = limb 3 from stream 1
-	add 	x10,x10,x11,lsl#32
+	// Move high blocks from INlo -> INhi and sparcify (put in even lanes)
+	zip2	z14.s,z9.s,${SVE_T0}.s
+	zip2	z15.s,z10.s,${SVE_T0}.s
+	zip2	z16.s,z11.s,${SVE_T0}.s
+	zip2	z17.s,z12.s,${SVE_T0}.s
+	zip2	z18.s,z13.s,${SVE_T0}.s
 
-	zip1	$SVE_IN01_2,$SVE_IN01_2,${SVE_MASK}.s	// Put values into even-indexed lanes
-	fmov	d12,x10						// Refer to SVE_IN01_3 as FP register
+	// Sparcify blocks to even lanes in INlo
+	zip1	z9.s,z9.s,${SVE_T0}.s
+	zip1	z10.s,z10.s,${SVE_T0}.s
+	zip1	z11.s,z11.s,${SVE_T0}.s
+	zip1	z12.s,z12.s,${SVE_T0}.s
+	zip1	z13.s,z13.s,${SVE_T0}.s
 
-	add 	x12,$padbit,x12,lsr#40      // w12 = limb 4 from stream 0
-	add 	x13,$padbit,x13,lsr#40      // w13 = limb 4 from stream 1
-	add 	x12,x12,x13,lsl#32
-
-	zip1	$SVE_IN01_3,$SVE_IN01_3,${SVE_MASK}.s	// Put values into even-indexed lanes
-	fmov	d13,x12						// Refer to SVE_IN01_4 as FP register
-	zip1	$SVE_IN01_4,$SVE_IN01_4,${SVE_MASK}.s	// Put values into even-indexed lanes
+	subs	$len,$len,#64
 
 	b.ls	.Lskip_loop_sve2_2way
 
@@ -1433,150 +1378,133 @@ poly1305_blocks_sve2:
 	// d1 = h0*r1 + h1*r0   + h2*5*r4 + h3*5*r3 + h4*5*r2
 	// d0 = h0*r0 + h1*5*r4 + h2*5*r3 + h3*5*r2 + h4*5*r1
 
-	subs	$len,$len,#64
+	// Is it the right place to do this?
+	add		$inp,$inp,$vl,lsl #5	// Half vector width * 32
+
 	umullb  $SVE_ACC4,$SVE_IN23_0,${SVE_R4}[1]  // remember - order changed from Neon impl.
-	csel	$in2,$zeros,$in2,lo
 	umullb	$SVE_ACC3,$SVE_IN23_0,${SVE_R3}[1]
 	umullb	$SVE_ACC2,$SVE_IN23_0,${SVE_R2}[1]
-	 ldp	x8,x12,[$in2],#16	                // inp[2:3] (or zero)
 	umullb	$SVE_ACC1,$SVE_IN23_0,${SVE_R1}[1]
-	 ldp	x9,x13,[$in2],#48
 	umullb	$SVE_ACC0,$SVE_IN23_0,${SVE_R0}[1]
 
-#ifdef	__AARCH64EB__
-	 rev	x8,x8
-	 rev	x12,x12
-	 rev	x9,x9
-	 rev	x13,x13
-#endif
-
 	umlalb	$SVE_ACC4,$SVE_IN23_1,${SVE_R3}[1]
-	 and    x4, x8, #0x03ffffff
 	umlalb	$SVE_ACC3,$SVE_IN23_1,${SVE_R2}[1]
-	 and    x5, x9, #0x03ffffff
 	umlalb	$SVE_ACC2,$SVE_IN23_1,${SVE_R1}[1]
-	 add	x4,x4,x5,lsl#32
 	umlalb	$SVE_ACC1,$SVE_IN23_1,${SVE_R0}[1]
-	 fmov	d14,x4
 	umlalb	$SVE_ACC0,$SVE_IN23_1,${SVE_S4}[1]
 
-	 ubfx   x6, x8, #26, #26
 	umlalb	$SVE_ACC4,$SVE_IN23_2,${SVE_R2}[1]
-	 ubfx   x7, x9, #26, #26
 	umlalb	$SVE_ACC3,$SVE_IN23_2,${SVE_R1}[1]
-	 add	x6,x6,x7,lsl#32
 	umlalb	$SVE_ACC2,$SVE_IN23_2,${SVE_R0}[1]
-	 zip1	$SVE_IN23_0,$SVE_IN23_0,${SVE_MASK}.s
-	 fmov	d15,x6
 	umlalb	$SVE_ACC1,$SVE_IN23_2,${SVE_S4}[1]
-	 extr   x8, x12, x8, #52                     // starting the next limb...
 	umlalb	$SVE_ACC0,$SVE_IN23_2,${SVE_S3}[1]
 
-	 extr   x9, x13, x9, #52
 	umlalb	$SVE_ACC4,$SVE_IN23_3,${SVE_R1}[1]
-	 and    x8, x8, #0x03ffffff
 	umlalb	$SVE_ACC3,$SVE_IN23_3,${SVE_R0}[1]
-	 and    x9, x9, #0x03ffffff
 	umlalb	$SVE_ACC2,$SVE_IN23_3,${SVE_S4}[1]
-	 add	x8,x8,x9,lsl#32
 	umlalb	$SVE_ACC1,$SVE_IN23_3,${SVE_S3}[1]
-	 zip1	$SVE_IN23_1,$SVE_IN23_1,${SVE_MASK}.s
-	 fmov	d16,x8
 	umlalb	$SVE_ACC0,$SVE_IN23_3,${SVE_S2}[1]
 
 	// In original impl. for some reason it starts from IN01_2.
 	// I decided to start from _0 as it simplifies the load of next-iteration input...
 	add 	$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
-	 ubfx   x10, x12, #14, #26
 	umlalb	$SVE_ACC4,$SVE_IN23_4,${SVE_R0}[1]
-	 ubfx   x11, x13, #14, #26
 	umlalb	$SVE_ACC3,$SVE_IN23_4,${SVE_S4}[1]
-	 add	x10,x10,x11,lsl#32
 	umlalb	$SVE_ACC2,$SVE_IN23_4,${SVE_S3}[1]
-	 zip1	$SVE_IN23_2,$SVE_IN23_2,${SVE_MASK}.s
-	 fmov	d17,x10
 	umlalb	$SVE_ACC1,$SVE_IN23_4,${SVE_S2}[1]
-	 add	x12,$padbit,x12,lsr#40            // Start next limb...
 	umlalb	$SVE_ACC0,$SVE_IN23_4,${SVE_S1}[1]
-	 add	x13,$padbit,x13,lsr#40
 
 	////////////////////////////////////////////////////////////////
 	// (hash+inp[0:1])*r^4 and accumulate
 	// Here R1-S3 index remains unchanged from Neon impl.
 
 	add 	$SVE_IN01_1,$SVE_IN01_1,$SVE_H1
-	 add	x12,x12,x13,lsl#32
 	umlalb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[0]
-	 zip1	$SVE_IN23_3,$SVE_IN23_3,${SVE_MASK}.s
-	 fmov	d18,x12
 	umlalb	$SVE_ACC4,$SVE_IN01_0,${SVE_R4}[0]
-	 ldp	x8,x12,[$inp],#16	                  // inp[0:1]
-	 zip1	$SVE_IN23_4,$SVE_IN23_4,${SVE_MASK}.s
-	 ldp	x9,x13,[$inp],#48
 	umlalb	$SVE_ACC2,$SVE_IN01_0,${SVE_R2}[0]
 	umlalb	$SVE_ACC0,$SVE_IN01_0,${SVE_R0}[0]
 	umlalb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[0]
 
-#ifdef	__AARCH64EB__
-	 rev	x8,x8
-	 rev	x12,x12
-	 rev	x9,x9
-	 rev	x13,x13
-#endif
-
 	add 	$SVE_IN01_2,$SVE_IN01_2,$SVE_H2
-	 and    x4, x8, #0x03ffffff
 	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[0]
-	 and    x5, x9, #0x03ffffff
 	umlalb	$SVE_ACC4,$SVE_IN01_1,${SVE_R3}[0]
-	 add	x4,x4,x5,lsl#32
 	umlalb	$SVE_ACC0,$SVE_IN01_1,${SVE_S4}[0]
-	 fmov	d9,x4
 	umlalb	$SVE_ACC2,$SVE_IN01_1,${SVE_R1}[0]
-	 ubfx   x6, x8, #26, #26
 	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[0]
-	 ubfx   x7, x9, #26, #26
 
 	add 	$SVE_IN01_3,$SVE_IN01_3,$SVE_H3
-	 add	x6,x6,x7,lsl#32
 	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[0]
-	 zip1	$SVE_IN01_0,$SVE_IN01_0,${SVE_MASK}.s
-	 fmov	d10,x6
 	umlalb	$SVE_ACC0,$SVE_IN01_2,${SVE_S3}[0]
-	 extr   x8, x12, x8, #52
 	umlalb	$SVE_ACC4,$SVE_IN01_2,${SVE_R2}[0]
-	 extr   x9, x13, x9, #52
 	umlalb	$SVE_ACC1,$SVE_IN01_2,${SVE_S4}[0]
-	 and    x8, x8, #0x03ffffff
 	umlalb	$SVE_ACC2,$SVE_IN01_2,${SVE_R0}[0]
-	 and    x9, x9, #0x03ffffff
 
 	add 	$SVE_IN01_4,$SVE_IN01_4,$SVE_H4
-	 add	x8,x8,x9,lsl#32
 	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[0]
-	 zip1	$SVE_IN01_1,$SVE_IN01_1,${SVE_MASK}.s
-	 fmov	d11,x8
 	umlalb	$SVE_ACC0,$SVE_IN01_3,${SVE_S2}[0]
-	 ubfx   x10, x12, #14, #26
 	umlalb	$SVE_ACC4,$SVE_IN01_3,${SVE_R1}[0]
-	 ubfx   x11, x13, #14, #26
 	umlalb	$SVE_ACC1,$SVE_IN01_3,${SVE_S3}[0]
-	 add	x10,x10,x11,lsl#32
 	umlalb	$SVE_ACC2,$SVE_IN01_3,${SVE_S4}[0]
-	 zip1	$SVE_IN01_2,$SVE_IN01_2,${SVE_MASK}.s
-	 fmov	d12,x10
 
 	umlalb	$SVE_ACC3,$SVE_IN01_4,${SVE_S4}[0]
-	 add	x12,$padbit,x12,lsr#40
 	umlalb	$SVE_ACC0,$SVE_IN01_4,${SVE_S1}[0]
-	 add	x13,$padbit,x13,lsr#40
 	umlalb	$SVE_ACC4,$SVE_IN01_4,${SVE_R0}[0]
-	 add	x12,x12,x13,lsl#32
 	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[0]
-	 zip1	$SVE_IN01_3,$SVE_IN01_3,${SVE_MASK}.s
 	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[0]
-	 fmov	d13,x12
-	 zip1	$SVE_IN01_4,$SVE_IN01_4,${SVE_MASK}.s
+
+	// Load and convert new input batch - to be removed when I implement new tail procedure
+	lsr		x15,$len,#4
+	whilelo	p1.s,xzr,x15
+	ld4w	{ z9.s-z12.s }, p1/z, [$inp]		// Loading all blocks at once
+
+#ifdef  __AARCH64EB__
+	revb	z9.s,  p0/m, z9.s
+	revb	z10.s, p0/m, z10.s
+	revb	z11.s, p0/m, z11.s
+	revb	z12.s, p0/m, z12.s
+#endif
+
+	dup 	${SVE_MASK}.s,#-1
+	lsr 	${SVE_MASK}.s,${SVE_MASK}.s,#6
+
+	lsr		${SVE_T0}.s,z11.s,#14		// T0 -> z11 >> 14
+	lsr		z13.s,z12.s,#8				// z13 -> l4
+	lsl		z12.s,z12.s,#18				// z12 -> upper part of l3
+	orr		z12.d,z12.d,${SVE_T0}.d		// z12 -> final l3
+	lsl		z11.s,z11.s,#12				// z11 -> upper part of l2
+	lsr		${SVE_T1}.s,z10.s,#20		// T1 -> z10 >> 20
+	lsl		z10.s,z10.s,#6				// z10 -> upper part of l1
+	lsr		${SVE_T0}.s,z9.s,#26		// T0 -> z9 >> 26
+	and		z9.d,z9.d,${SVE_MASK}.d		// z0 is now final l0
+	orr		z11.d,z11.d,${SVE_T1}.d		// z11 -> final l2
+	orr		z10.d,z10.d,${SVE_T0}.d		// z10 -> final l1
+
+	dup		${SVE_T1}.s,w3
+
+	orr		z13.d,z13.d,${SVE_T1}.d		// l4 += padbit
+	and		z12.d,z12.d,${SVE_MASK}.d	// Mask l3
+	and		z11.d,z11.d,${SVE_MASK}.d	// Mask l2
+	and		z10.d,z10.d,${SVE_MASK}.d	// Mask l1
+
+	// Now distribute interleaving blocks to two sets of vector registers
+	// I guess I could use T0 as mask and interleave below with above somewhat
+	eor 	${SVE_T0}.d,${SVE_T0}.d,${SVE_T0}.d	// set zero mask
+
+	// Move high blocks from INlo -> INhi and sparcify (put in even lanes)
+	zip2	z14.s,z9.s,${SVE_T0}.s
+	zip2	z15.s,z10.s,${SVE_T0}.s
+	zip2	z16.s,z11.s,${SVE_T0}.s
+	zip2	z17.s,z12.s,${SVE_T0}.s
+	zip2	z18.s,z13.s,${SVE_T0}.s
+
+	// Sparcify blocks to even lanes in INlo
+	zip1	z9.s,z9.s,${SVE_T0}.s
+	zip1	z10.s,z10.s,${SVE_T0}.s
+	zip1	z11.s,z11.s,${SVE_T0}.s
+	zip1	z12.s,z12.s,${SVE_T0}.s
+	zip1	z13.s,z13.s,${SVE_T0}.s
+
+	subs	$len,$len,#64			// Should also be a func. of vl
 
 	/////////////////////////////////////////////////////////////////
 	// lazy reduction as discussed in "NEON crypto" by D.J. Bernstein
