@@ -1062,6 +1062,64 @@ poly1305_sqr_2_44:
     ret
 .size	poly1305_sqr_2_44,.-poly1305_sqr_2_44
 
+// --- poly1305_lazy_reduce_sve2 ---
+// Performs lazy reduction on five accumulator vectors as discussed
+// in "NEON crypto" by D.J. Bernstein and P. Schwabe.
+//
+// This is a leaf function and does not modify GPRs or the stack.
+//
+// Calling Convention:
+//   Inputs:
+//     z19-z23: The five 64-bit .d accumulator vectors (ACC0-ACC4)
+//   Outputs:
+//     z24-z28: The five 32-bit .s final limb vectors (H0-H4)
+//     z31: All-zeros (resets mask)
+//   Clobbers (uses as temporaries):
+//     z29, z30
+
+.type	poly1305_lazy_reduce_sve2,%function
+.align	5
+poly1305_lazy_reduce_sve2:
+	dup 	${SVE_MASK}.d,#-1
+	lsr 	${SVE_T0}.d,$SVE_ACC3,#26
+	trn1	$SVE_H3,z22.s,z24.s					// reproducing Neon's `xtn` - treat ACC3 as a .s vector
+	lsr 	${SVE_MASK}.d,${SVE_MASK}.d,#38
+	lsr 	${SVE_T1}.d,$SVE_ACC0,#26
+	and 	$SVE_ACC0,$SVE_ACC0,${SVE_MASK}.d
+	add 	$SVE_ACC4,$SVE_ACC4,${SVE_T0}.d	    // h3 -> h4
+	// Neon's bic is replaced with &=$SVE_MASK (because of using even-indexed elements)
+	and 	z27.d,z27.d,${SVE_MASK}.d			// refer to SVE_H3 as .d
+	add 	$SVE_ACC1,$SVE_ACC1,${SVE_T1}.d	    // h0 -> h1
+
+	lsr 	${SVE_T0}.d,$SVE_ACC4,#26
+	trn1	$SVE_H4,z23.s,z24.s					// reproducing Neon's `xtn` - treat ACC4 as a .s vector
+	lsr 	${SVE_T1}.d,$SVE_ACC1,#26
+	trn1	$SVE_H1,z20.s,z24.s					// reproducing Neon's `xtn` - treat ACC1 as a .s vector
+	and 	z28.d,z28.d,${SVE_MASK}.d			// refer to SVE_H4 as .d
+	add 	$SVE_ACC2,$SVE_ACC2,${SVE_T1}.d	    // h1 -> h2
+
+	add 	$SVE_ACC0,$SVE_ACC0,${SVE_T0}.d
+	lsl 	${SVE_T0}.d,${SVE_T0}.d,#2
+	shrnb	${SVE_T1}.s,$SVE_ACC2,#26			// check it's OK
+	trn1	$SVE_H2,z21.s,z24.s					// reproducing Neon's `xtn` - treat ACC2 as a .s vector
+	add 	$SVE_ACC0,$SVE_ACC0,${SVE_T0}.d		// h4 -> h0
+	and 	z25.d,z25.d,${SVE_MASK}.d			// refer to SVE_H1 as .d
+	add 	$SVE_H3,$SVE_H3,${SVE_T1}.s			// h2 -> h3
+	and 	z26.d,z26.d,${SVE_MASK}.d			// refer to SVE_H2 as .d
+
+	shrnb	${SVE_T0}.s,$SVE_ACC0,#26
+	trn1	$SVE_H0,z19.s,z24.s					// reproducing Neon's `xtn` - treat ACC0 as a .s vector - re-writing H0 here...
+	lsr 	${SVE_T1}.s,$SVE_H3,#26
+	and 	z27.d,z27.d,${SVE_MASK}.d			// refer to SVE_H3 as .d
+	add 	$SVE_H1,$SVE_H1,${SVE_T0}.s			// h0 -> h1
+	and 	z24.d,z24.d,${SVE_MASK}.d			// refer to SVE_H0 as .d
+	add 	$SVE_H4,$SVE_H4,${SVE_T1}.s			// h3 -> h4
+
+	eor 	${SVE_MASK}.d,${SVE_MASK}.d,${SVE_MASK}.d	// reset zero mask
+
+    ret
+.size	poly1305_lazy_reduce_sve2,.-poly1305_lazy_reduce_sve2
+
 .type	poly1305_blocks_sve2,%function
 .align	5
 poly1305_blocks_sve2:
@@ -1071,8 +1129,8 @@ poly1305_blocks_sve2:
 	// Estimate vector width and branch to scalar if input too short
 	cntd	$vl				// vector width in 64-bit lanes (vl)
 	lsl	$vl0,$vl,#4			// vl * 16 (bytes per vector input blocks) 
-	mov $vl1,$vl0,lsl #2	// 4 * vl * 16
-	//add $t1,$t0,$t0,lsl #1	// 3 * vl * 16 
+	//mov $vl1,$vl0,lsl #2	// 4 * vl * 16
+	add $vl1,$vl0,$vl0,lsl #1	// 3 * vl * 16 
 	cmp	$len,$vl1
 	b.hs	.Lblocks_sve2
 	cbz	$is_base2_26,.Lpoly1305_blocks	// if in base 2^26 - proceed
@@ -1487,7 +1545,7 @@ poly1305_blocks_sve2:
 	and		z10.d,z10.d,${SVE_MASK}.d	// Mask l1
 
 	// Now distribute interleaving blocks to two sets of vector registers
-	// I guess I could use T0 as mask and interleave below with above somewhat
+	// I guess I could interleave below with above somewhat
 	eor 	${SVE_T0}.d,${SVE_T0}.d,${SVE_T0}.d	// set zero mask
 
 	// Move high blocks from INlo -> INhi and sparcify (put in even lanes)
@@ -1506,46 +1564,9 @@ poly1305_blocks_sve2:
 
 	subs	$len,$len,#64			// Should also be a func. of vl
 
-	/////////////////////////////////////////////////////////////////
-	// lazy reduction as discussed in "NEON crypto" by D.J. Bernstein
-	// and P. Schwabe
-
-	dup 	${SVE_MASK}.d,#-1
-	lsr 	${SVE_T0}.d,$SVE_ACC3,#26
-	trn1	$SVE_H3,z22.s,z24.s					// reproducing Neon's `xtn` - treat ACC3 as a .s vector
-	lsr 	${SVE_MASK}.d,${SVE_MASK}.d,#38
-	lsr 	${SVE_T1}.d,$SVE_ACC0,#26
-	and 	$SVE_ACC0,$SVE_ACC0,${SVE_MASK}.d
-	add 	$SVE_ACC4,$SVE_ACC4,${SVE_T0}.d	    // h3 -> h4
-	// Neon's bic is replaced with &=$SVE_MASK (because of using even-indexed elements)
-	and 	z27.d,z27.d,${SVE_MASK}.d			// refer to SVE_H3 as .d
-	add 	$SVE_ACC1,$SVE_ACC1,${SVE_T1}.d	    // h0 -> h1
-
-	lsr 	${SVE_T0}.d,$SVE_ACC4,#26
-	trn1	$SVE_H4,z23.s,z24.s					// reproducing Neon's `xtn` - treat ACC4 as a .s vector
-	lsr 	${SVE_T1}.d,$SVE_ACC1,#26
-	trn1	$SVE_H1,z20.s,z24.s					// reproducing Neon's `xtn` - treat ACC1 as a .s vector
-	and 	z28.d,z28.d,${SVE_MASK}.d			// refer to SVE_H4 as .d
-	add 	$SVE_ACC2,$SVE_ACC2,${SVE_T1}.d	    // h1 -> h2
-
-	add 	$SVE_ACC0,$SVE_ACC0,${SVE_T0}.d
-	lsl 	${SVE_T0}.d,${SVE_T0}.d,#2
-	shrnb	${SVE_T1}.s,$SVE_ACC2,#26			// check it's OK
-	trn1	$SVE_H2,z21.s,z24.s					// reproducing Neon's `xtn` - treat ACC2 as a .s vector
-	add 	$SVE_ACC0,$SVE_ACC0,${SVE_T0}.d		// h4 -> h0
-	and 	z25.d,z25.d,${SVE_MASK}.d			// refer to SVE_H1 as .d
-	add 	$SVE_H3,$SVE_H3,${SVE_T1}.s			// h2 -> h3
-	and 	z26.d,z26.d,${SVE_MASK}.d			// refer to SVE_H2 as .d
-
-	shrnb	${SVE_T0}.s,$SVE_ACC0,#26
-	trn1	$SVE_H0,z19.s,z24.s					// reproducing Neon's `xtn` - treat ACC0 as a .s vector - re-writing H0 here...
-	lsr 	${SVE_T1}.s,$SVE_H3,#26
-	and 	z27.d,z27.d,${SVE_MASK}.d			// refer to SVE_H3 as .d
-	add 	$SVE_H1,$SVE_H1,${SVE_T0}.s			// h0 -> h1
-	and 	z24.d,z24.d,${SVE_MASK}.d			// refer to SVE_H0 as .d
-	add 	$SVE_H4,$SVE_H4,${SVE_T1}.s			// h3 -> h4
-
-	eor 	${SVE_MASK}.d,${SVE_MASK}.d,${SVE_MASK}.d	// reset zero mask
+	// Lazy reduction
+	bl		poly1305_lazy_reduce_sve2
+	ldr	x30,[sp,#8]
 
 	b.hi	.Loop_sve2_2way
 
