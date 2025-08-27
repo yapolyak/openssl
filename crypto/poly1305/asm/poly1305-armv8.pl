@@ -1282,6 +1282,8 @@ poly1305_blocks_sve2:
 	str	w5,[$ctx,#28]
 
 .Lpwrs_precomputed:
+	add	$pwr,$pwr,x5
+
 	ldp	$h0,$h1,[$ctx]		// load hash value base 2^64
 	ldr $h2,[$ctx,#16]
 
@@ -1317,10 +1319,15 @@ poly1305_blocks_sve2:
 
 	mov	x4,#1
 	stur	x4,[$ctx,#24]		// set is_base2_26
-	b	.Ldo_sve2_2way
+	b	.Ldo_sve2
 
 .align	4
 .Leven_sve2:
+	ldr w5,[$ctx,#28]		// Load top power (if exists - 0 by default)
+	//add $pwr,$ctx,#48+28	// Point to the end of powers allocation
+	add $pwr,$ctx,#48+16	// Delete me!
+	add	$pwr,$pwr,x5
+
 	stp	d8,d9,[sp,#80]		// meet ABI requirements
 	stp	d10,d11,[sp,#96]
 	stp	d12,d13,[sp,#112]
@@ -1338,10 +1345,10 @@ poly1305_blocks_sve2:
 	fmov	d27,x13		// H3
 	fmov	d28,x14		// H4
 
-.Ldo_sve2_2way:
+.Ldo_sve2:
     ptrue   p0.b, ALL               		// Set all-true predicate
 
-	// Load r-powers.
+	// Load r-powers. !NEEDS CHANGES FOR VLA!
 	// while LD4W { <Zt1>.S, <Zt2>.S, <Zt3>.S, <Zt4>.S }, <Pg>/Z, [<Xn|SP>{, #<imm>, MUL VL}]
 	// exists in FEAT_SVE, it de-interleaves - one would need to re-write poly1305_splat.
 	// Contiguous load exists in FEAT_SVE2v1, this should be possible in the future:
@@ -1358,6 +1365,9 @@ poly1305_blocks_sve2:
 	ld1w	{ $SVE_R4 }, p0/z, [x15, #7, MUL VL]
 	add 	x15, x15, #128     // [x15, #8, MUL VL] would be out of bounds..
 	ld1w	{ $SVE_S4 }, p0/z, [x15]
+
+	//Adjust $pwr accordingly
+	//add	$pwr,$pwr,4
 
 	// Load initial input blocks
 	lsr		x15,$len,#4
@@ -1415,10 +1425,10 @@ poly1305_blocks_sve2:
 
 	subs	$len,$len,#64
 
-	b.ls	.Lskip_loop_sve2_2way
+	b.ls	.Lskip_loop_sve2
 
 .align	4
-.Loop_sve2_2way:
+.Loop_sve2:
 	////////////////////////////////////////////////////////////////
 	// ((inp[0]*r^4+inp[2]*r^2+inp[4])*r^4+inp[6]*r^2
 	// ((inp[1]*r^4+inp[3]*r^2+inp[5])*r^3+inp[7]*r
@@ -1568,116 +1578,220 @@ poly1305_blocks_sve2:
 	bl		poly1305_lazy_reduce_sve2
 	ldr	x30,[sp,#8]
 
-	b.hi	.Loop_sve2_2way
+	b.hi	.Loop_sve2
 
-.Lskip_loop_sve2_2way:
-	dup 	${SVE_MASK}.d,#-1
-	lsr 	${SVE_MASK}.d,${SVE_MASK}.d,#38
-	trn1	$SVE_IN23_2,$SVE_IN23_2,$SVE_IN23_2
-	add 	$SVE_IN01_2,$SVE_IN01_2,$SVE_H2
-
-	////////////////////////////////////////////////////////////////
-	// multiply (inp[0:1]+hash) or inp[2:3] by r^2:r^1
+.Lskip_loop_sve2:
 
 	adds	$len,$len,#32
-	b.ne	.Long_tail_sve2_2way
+	b.eq	.Lshort_tail_sve2
 
-	trn1	$SVE_IN23_2,$SVE_IN01_2,$SVE_IN01_2
-	add 	$SVE_IN23_0,$SVE_IN01_0,$SVE_H0
-	add 	$SVE_IN23_3,$SVE_IN01_3,$SVE_H3
-	add 	$SVE_IN23_1,$SVE_IN01_1,$SVE_H1
-	add 	$SVE_IN23_4,$SVE_IN01_4,$SVE_H4
-
-.Long_tail_sve2_2way:
-	trn1	$SVE_IN23_0,$SVE_IN23_0,$SVE_IN23_0
-	umullt	$SVE_ACC0,$SVE_IN23_2,$SVE_S3
-	umullt	$SVE_ACC3,$SVE_IN23_2,$SVE_R1
-	umullt	$SVE_ACC4,$SVE_IN23_2,$SVE_R2
-	umullt	$SVE_ACC2,$SVE_IN23_2,$SVE_R0
-	umullt	$SVE_ACC1,$SVE_IN23_2,$SVE_S4
-
-	trn1	$SVE_IN23_1,$SVE_IN23_1,$SVE_IN23_1
-	umlalt	$SVE_ACC0,$SVE_IN23_0,$SVE_R0
-	umlalt	$SVE_ACC2,$SVE_IN23_0,$SVE_R2
-	umlalt	$SVE_ACC3,$SVE_IN23_0,$SVE_R3
-	umlalt	$SVE_ACC4,$SVE_IN23_0,$SVE_R4
-	umlalt	$SVE_ACC1,$SVE_IN23_0,$SVE_R1
-
-	trn1	$SVE_IN23_3,$SVE_IN23_3,$SVE_IN23_3
-	umlalt	$SVE_ACC0,$SVE_IN23_1,$SVE_S4
-	umlalt	$SVE_ACC3,$SVE_IN23_1,$SVE_R2
-	umlalt	$SVE_ACC2,$SVE_IN23_1,$SVE_R1
-	umlalt	$SVE_ACC4,$SVE_IN23_1,$SVE_R3
-	umlalt	$SVE_ACC1,$SVE_IN23_1,$SVE_R0
-
-	trn1	$SVE_IN23_4,$SVE_IN23_4,$SVE_IN23_4
-	umlalt	$SVE_ACC3,$SVE_IN23_3,$SVE_R0
-	umlalt	$SVE_ACC4,$SVE_IN23_3,$SVE_R1
-	umlalt	$SVE_ACC0,$SVE_IN23_3,$SVE_S2
-	umlalt	$SVE_ACC1,$SVE_IN23_3,$SVE_S3
-	umlalt	$SVE_ACC2,$SVE_IN23_3,$SVE_S4
-
-	umlalt	$SVE_ACC3,$SVE_IN23_4,$SVE_S4
-	umlalt	$SVE_ACC0,$SVE_IN23_4,$SVE_S1
-	umlalt	$SVE_ACC4,$SVE_IN23_4,$SVE_R0
-	umlalt	$SVE_ACC1,$SVE_IN23_4,$SVE_S2
-	umlalt	$SVE_ACC2,$SVE_IN23_4,$SVE_S3
-
-	b.eq	.Lshort_tail_sve2_2way
-
+.Long_tail_sve2:
 	////////////////////////////////////////////////////////////////
-	// (hash+inp[0:1])*r^4:r^3 and accumulate
+	// (hash + inp[lo])*r^{vl} + inp[hi])*r^{vl..1}               //
+	//  \____________________/                                    //
+	//  first part of long tail                                   //
+	////////////////////////////////////////////////////////////////
+	//NB `vl` here (and in the code) is the vector length in double words.
+	//For now assuming 128-bit width and using r^2.
+
+	// Might want to re-arrange, accoring to the lazy reduction order
+	add 	$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
+	add 	$SVE_IN01_1,$SVE_IN01_1,$SVE_H1
+	add 	$SVE_IN01_2,$SVE_IN01_2,$SVE_H2
+	add 	$SVE_IN01_3,$SVE_IN01_3,$SVE_H3
+	add 	$SVE_IN01_4,$SVE_IN01_4,$SVE_H4
+
+	umullb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[1]
+	umullb	$SVE_ACC4,$SVE_IN01_0,${SVE_R4}[1]
+	umullb	$SVE_ACC2,$SVE_IN01_0,${SVE_R2}[1]
+	umullb	$SVE_ACC0,$SVE_IN01_0,${SVE_R0}[1]
+	umullb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[1]
+
+	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[1]
+	umlalb	$SVE_ACC4,$SVE_IN01_1,${SVE_R3}[1]
+	umlalb	$SVE_ACC0,$SVE_IN01_1,${SVE_S4}[1]
+	umlalb	$SVE_ACC2,$SVE_IN01_1,${SVE_R1}[1]
+	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[1]
+
+	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[1]
+	umlalb	$SVE_ACC0,$SVE_IN01_2,${SVE_S3}[1]
+	umlalb	$SVE_ACC4,$SVE_IN01_2,${SVE_R2}[1]
+	umlalb	$SVE_ACC1,$SVE_IN01_2,${SVE_S4}[1]
+	umlalb	$SVE_ACC2,$SVE_IN01_2,${SVE_R0}[1]
+
+	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[1]
+	umlalb	$SVE_ACC0,$SVE_IN01_3,${SVE_S2}[1]
+	umlalb	$SVE_ACC4,$SVE_IN01_3,${SVE_R1}[1]
+	umlalb	$SVE_ACC1,$SVE_IN01_3,${SVE_S3}[1]
+	umlalb	$SVE_ACC2,$SVE_IN01_3,${SVE_S4}[1]
+
+	umlalb	$SVE_ACC3,$SVE_IN01_4,${SVE_S4}[1]
+	umlalb	$SVE_ACC0,$SVE_IN01_4,${SVE_S1}[1]
+	umlalb	$SVE_ACC4,$SVE_IN01_4,${SVE_R0}[1]
+	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[1]
+	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[1]
+
+	// Lazy reduction
+	bl		poly1305_lazy_reduce_sve2
+	ldr	x30,[sp,#8]
+
+	// Move INhi -> INlo. Have to refer to as double-words vectors.
+	// Should interleave with above I gather
+	mov		z9.d,z14.d	
+	mov		z10.d,z15.d
+	mov		z11.d,z16.d
+	mov		z12.d,z17.d
+	mov		z13.d,z18.d
+
+.Lshort_tail_sve2:
+
+	cmp     $vl, #2
+    b.ls    .Last_reduce_sve2
+
+.Loop_reduce_sve2:
+	////////////////////////////////////////////////////////////////
+	// (hash + inp[hi])*r^{vl/2..2}                               //
+	//       \____________________/                               //
+	//  iterative reduction part of the short tail                //
+	////////////////////////////////////////////////////////////////
+	// Skipped for 128-bit case (vl==2)
+	// Load the correct r-power - currently assuming 256-bit width,
+	// so using r^2, assuming it's at lane 2. 
+
+	// TODO: Increment $pwr
 
 	add 	$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
-	umlalb	$SVE_ACC3,$SVE_IN01_2,$SVE_R1
-	umlalb	$SVE_ACC0,$SVE_IN01_2,$SVE_S3
-	umlalb	$SVE_ACC4,$SVE_IN01_2,$SVE_R2
-	umlalb	$SVE_ACC1,$SVE_IN01_2,$SVE_S4
-	umlalb	$SVE_ACC2,$SVE_IN01_2,$SVE_R0
-
 	add 	$SVE_IN01_1,$SVE_IN01_1,$SVE_H1
-	umlalb	$SVE_ACC3,$SVE_IN01_0,$SVE_R3
-	umlalb	$SVE_ACC0,$SVE_IN01_0,$SVE_R0
-	umlalb	$SVE_ACC4,$SVE_IN01_0,$SVE_R4
-	umlalb	$SVE_ACC1,$SVE_IN01_0,$SVE_R1
-	umlalb	$SVE_ACC2,$SVE_IN01_0,$SVE_R2
-
+	add 	$SVE_IN01_2,$SVE_IN01_2,$SVE_H2
 	add 	$SVE_IN01_3,$SVE_IN01_3,$SVE_H3
-	umlalb	$SVE_ACC3,$SVE_IN01_1,$SVE_R2
-	umlalb	$SVE_ACC0,$SVE_IN01_1,$SVE_S4
-	umlalb	$SVE_ACC4,$SVE_IN01_1,$SVE_R3
-	umlalb	$SVE_ACC1,$SVE_IN01_1,$SVE_R0
-	umlalb	$SVE_ACC2,$SVE_IN01_1,$SVE_R1
-
 	add 	$SVE_IN01_4,$SVE_IN01_4,$SVE_H4
-	umlalb	$SVE_ACC3,$SVE_IN01_3,$SVE_R0
-	umlalb	$SVE_ACC0,$SVE_IN01_3,$SVE_S2
-	umlalb	$SVE_ACC4,$SVE_IN01_3,$SVE_R1
-	umlalb	$SVE_ACC1,$SVE_IN01_3,$SVE_S3
-	umlalb	$SVE_ACC2,$SVE_IN01_3,$SVE_S4
 
-	umlalb	$SVE_ACC3,$SVE_IN01_4,$SVE_S4
-	umlalb	$SVE_ACC0,$SVE_IN01_4,$SVE_S1
-	umlalb	$SVE_ACC4,$SVE_IN01_4,$SVE_R0
-	umlalb	$SVE_ACC1,$SVE_IN01_4,$SVE_S2
-	umlalb	$SVE_ACC2,$SVE_IN01_4,$SVE_S3
+	umullb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[2]
+	umullb	$SVE_ACC4,$SVE_IN01_0,${SVE_R4}[2]
+	umullb	$SVE_ACC2,$SVE_IN01_0,${SVE_R2}[2]
+	umullb	$SVE_ACC0,$SVE_IN01_0,${SVE_R0}[2]
+	umullb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[2]
 
-.Lshort_tail_sve2_2way:
+	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[2]
+	umlalb	$SVE_ACC4,$SVE_IN01_1,${SVE_R3}[2]
+	umlalb	$SVE_ACC0,$SVE_IN01_1,${SVE_S4}[2]
+	umlalb	$SVE_ACC2,$SVE_IN01_1,${SVE_R1}[2]
+	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[2]
+
+	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[2]
+	umlalb	$SVE_ACC0,$SVE_IN01_2,${SVE_S3}[2]
+	umlalb	$SVE_ACC4,$SVE_IN01_2,${SVE_R2}[2]
+	umlalb	$SVE_ACC1,$SVE_IN01_2,${SVE_S4}[2]
+	umlalb	$SVE_ACC2,$SVE_IN01_2,${SVE_R0}[2]
+
+	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[2]
+	umlalb	$SVE_ACC0,$SVE_IN01_3,${SVE_S2}[2]
+	umlalb	$SVE_ACC4,$SVE_IN01_3,${SVE_R1}[2]
+	umlalb	$SVE_ACC1,$SVE_IN01_3,${SVE_S3}[2]
+	umlalb	$SVE_ACC2,$SVE_IN01_3,${SVE_S4}[2]
+
+	umlalb	$SVE_ACC3,$SVE_IN01_4,${SVE_S4}[2]
+	umlalb	$SVE_ACC0,$SVE_IN01_4,${SVE_S1}[2]
+	umlalb	$SVE_ACC4,$SVE_IN01_4,${SVE_R0}[2]
+	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[2]
+	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[2]
+
+	// Lazy reduction
+	bl		poly1305_lazy_reduce_sve2
+	ldr	x30,[sp,#8]
+
+	// Move higher part of vectors to lower part, depending on current vl
+	// NB look-up is done in terms of single-word lanes, hence indices
+	//  start from vl (refer to as w16) and not vl/2
+	// Higher part now contains "junk"
+	index	${SVE_T0}.s,w16,#1
+	tbl		${SVE_IN01_0},${SVE_IN01_0},${SVE_T0}.s
+	tbl		${SVE_IN01_1},${SVE_IN01_1},${SVE_T0}.s
+	tbl		${SVE_IN01_2},${SVE_IN01_2},${SVE_T0}.s
+	tbl		${SVE_IN01_3},${SVE_IN01_3},${SVE_T0}.s
+	tbl		${SVE_IN01_4},${SVE_IN01_4},${SVE_T0}.s
+	lsr		$vl,$vl,#1		// vl /= 2
+	cmp 	$vl,#2
+	b.hi	.Loop_reduce_sve2
+
+.Last_reduce_sve2:
+	////////////////////////////////////////////////////////////////
+	// (hash + inp[hi])*r^{2,1}                                   //
+	//       \________________/                                   //
+	//  Final part of the short tail                              //
+	////////////////////////////////////////////////////////////////
+	// TODO: Load r^2 and r^1 into appropriate positions...
+	// for 128-bit currently this is currently in [1] and [3]
+
+	//Last hash addition - now everything stored in SVE_Hx
+	add 	$SVE_H0,$SVE_H0,$SVE_IN01_0
+	add 	$SVE_H1,$SVE_H1,$SVE_IN01_1
+	add 	$SVE_H2,$SVE_H2,$SVE_IN01_2
+	add 	$SVE_H3,$SVE_H3,$SVE_IN01_3
+	add 	$SVE_H4,$SVE_H4,$SVE_IN01_4
+
+	// Shift even lanes to odd lanes and set even to zero
+	//  because r^2 and r^1 are in lanes 1 and 3 of R-vectors
+	//  TODO: This will probably change - need to think where to load...
+	// Hoping SVE_MASK is all-zero here
+	trn1	$SVE_H0,${SVE_MASK}.s,$SVE_H0
+	trn1	$SVE_H1,${SVE_MASK}.s,$SVE_H1
+	trn1	$SVE_H2,${SVE_MASK}.s,$SVE_H2
+	trn1	$SVE_H3,${SVE_MASK}.s,$SVE_H3
+	trn1	$SVE_H4,${SVE_MASK}.s,$SVE_H4
+
+	umullt	$SVE_ACC3,$SVE_H0,${SVE_R3}
+	umullt	$SVE_ACC4,$SVE_H0,${SVE_R4}
+	umullt	$SVE_ACC2,$SVE_H0,${SVE_R2}
+	umullt	$SVE_ACC0,$SVE_H0,${SVE_R0}
+	umullt	$SVE_ACC1,$SVE_H0,${SVE_R1}
+
+	umlalt	$SVE_ACC3,$SVE_H1,${SVE_R2}
+	umlalt	$SVE_ACC4,$SVE_H1,${SVE_R3}
+	umlalt	$SVE_ACC0,$SVE_H1,${SVE_S4}
+	umlalt	$SVE_ACC2,$SVE_H1,${SVE_R1}
+	umlalt	$SVE_ACC1,$SVE_H1,${SVE_R0}
+
+	umlalt	$SVE_ACC3,$SVE_H2,${SVE_R1}
+	umlalt	$SVE_ACC0,$SVE_H2,${SVE_S3}
+	umlalt	$SVE_ACC4,$SVE_H2,${SVE_R2}
+	umlalt	$SVE_ACC1,$SVE_H2,${SVE_S4}
+	umlalt	$SVE_ACC2,$SVE_H2,${SVE_R0}
+
+	umlalt	$SVE_ACC3,$SVE_H3,${SVE_R0}
+	umlalt	$SVE_ACC0,$SVE_H3,${SVE_S2}
+	umlalt	$SVE_ACC4,$SVE_H3,${SVE_R1}
+	umlalt	$SVE_ACC1,$SVE_H3,${SVE_S3}
+	umlalt	$SVE_ACC2,$SVE_H3,${SVE_S4}
+
+	umlalt	$SVE_ACC3,$SVE_H4,${SVE_S4}
+	umlalt	$SVE_ACC0,$SVE_H4,${SVE_S1}
+	umlalt	$SVE_ACC4,$SVE_H4,${SVE_R0}
+	umlalt	$SVE_ACC1,$SVE_H4,${SVE_S2}
+	umlalt	$SVE_ACC2,$SVE_H4,${SVE_S3}
+
+	// Generate predicate for the last two double words
+	mov		x15,#2
+	whilelo p2.d,xzr,x15
+
+	dup 	${SVE_MASK}.d,#-1
+	lsr 	${SVE_MASK}.d,${SVE_MASK}.d,#38
+
 	////////////////////////////////////////////////////////////////
 	// horizontal add
 
 	//In Neon implementation, one effectively using lower 64 bits of vector registers here.
 	//Here and below I use hard-coded FP registers.
 
-	uaddv   d22, p0, $SVE_ACC3
+	uaddv	d22,p2,$SVE_ACC3
 	 ldp	d8,d9,[sp,#80]		// meet ABI requirements
-	uaddv   d19, p0, $SVE_ACC0
+	uaddv	d19,p2,$SVE_ACC0
 	 ldp	d10,d11,[sp,#96]
-	uaddv   d23, p0, $SVE_ACC4
+	uaddv	d23,p2,$SVE_ACC4
 	 ldp	d12,d13,[sp,#112]
-	uaddv   d20, p0, $SVE_ACC1
+	uaddv	d20,p2,$SVE_ACC1
 	 ldp	d14,d15,[sp,#128]
-	uaddv   d21, p0, $SVE_ACC2
+	uaddv	d21,p2,$SVE_ACC2
 
 	////////////////////////////////////////////////////////////////
 	// lazy reduction, but without narrowing
@@ -1729,7 +1843,6 @@ poly1305_blocks_sve2:
 	AARCH64_VALIDATE_LINK_REGISTER
 	ret
 .size	poly1305_blocks_sve2,.-poly1305_blocks_sve2
-
 
 
 .rodata
