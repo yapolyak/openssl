@@ -1311,6 +1311,8 @@ poly1305_blocks_sve2:
 	mov		x15,#2
 	whilelo	p1.s,xzr,x15
 
+	// If wouldn't need to load in two chunks, could use ld1rqw - 
+	//  optimisation potential for 256-bit vector.
 	ld1w	{ $SVE_R0 },p1/z,[$pwr]
 	ld1w	{ $SVE_T0.s },p1/z,[x10]
 	add		$pwr,$pwr,#28
@@ -1322,31 +1324,38 @@ poly1305_blocks_sve2:
 	add		$pwr,$pwr,#28
 	add		x10,x10,#28
 	zip1	$SVE_R1,$SVE_R1,$SVE_T1.s
-	adr     $SVE_S1,[$SVE_R1,$SVE_R1,lsl #2]
 
 	ld1w	{ $SVE_R2 },p1/z,[$pwr]
-	ld1w	{ $SVE_T1.s },p1/z,[x10]
+	ld1w	{ $SVE_T0.s },p1/z,[x10]
 	add		$pwr,$pwr,#28
 	add		x10,x10,#28
-	zip1	$SVE_R2,$SVE_R2,$SVE_T1.s
-	adr     $SVE_S2,[$SVE_R2,$SVE_R2,lsl #2]
+	zip1	$SVE_R2,$SVE_R2,$SVE_T0.s
 
 	ld1w	{ $SVE_R3 },p1/z,[$pwr]
 	ld1w	{ $SVE_T1.s },p1/z,[x10]
 	add		$pwr,$pwr,#28
 	add		x10,x10,#28
 	zip1	$SVE_R3,$SVE_R3,$SVE_T1.s
-	adr     $SVE_S3,[$SVE_R3,$SVE_R3,lsl #2]
 
 	ld1w	{ $SVE_R4 },p1/z,[$pwr]
-	ld1w	{ $SVE_T1.s },p1/z,[x10]
-	add		$pwr,$pwr,#28
-	add		x10,x10,#28
-	zip1	$SVE_R4,$SVE_R4,$SVE_T1.s
-	adr     $SVE_S4,[$SVE_R4,$SVE_R4,lsl #2]
+	ld1w	{ $SVE_T0.s },p1/z,[x10]
+	sub		$pwr,$pwr,#104						// Adjust to 1st lobe, 3d power
+	zip1	$SVE_R4,$SVE_R4,$SVE_T0.s
 
-	//Adjust $pwr accordingly
-	//add	$pwr,$pwr,4
+	// Broadcast r-powers loaded above to higher parts of the vectors.
+	cmp		$vl,#2
+	b.eq	.L_skip_dup_broadcast
+	dup		z0.q,z0.q[0]
+	dup		z1.q,z1.q[0]
+	dup		z3.q,z3.q[0]
+	dup		z5.q,z5.q[0]
+	dup		z7.q,z7.q[0]
+
+.L_skip_dup_broadcast:
+	adr     $SVE_S1,[$SVE_R1,$SVE_R1,lsl #2]
+	adr     $SVE_S2,[$SVE_R2,$SVE_R2,lsl #2]
+	adr     $SVE_S3,[$SVE_R3,$SVE_R3,lsl #2]
+	adr     $SVE_S4,[$SVE_R4,$SVE_R4,lsl #2]
 
 	// Load initial input blocks
 	lsr		x15,$len,#4
@@ -1402,7 +1411,7 @@ poly1305_blocks_sve2:
 	zip1	z12.s,z12.s,${SVE_T0}.s
 	zip1	z13.s,z13.s,${SVE_T0}.s
 
-	subs	$len,$len,#64
+	subs	$len,$len,$vl,lsl #5		// By half vector width * 32
 
 	b.ls	.Lskip_loop_sve2
 
@@ -1425,10 +1434,9 @@ poly1305_blocks_sve2:
 	// d1 = h0*r1 + h1*r0   + h2*5*r4 + h3*5*r3 + h4*5*r2
 	// d0 = h0*r0 + h1*5*r4 + h2*5*r3 + h3*5*r2 + h4*5*r1
 
-	// Is it the right place to do this?
-	add		$inp,$inp,$vl,lsl #5	// Half vector width * 32
+	add		$inp,$inp,$vl,lsl #5
 
-	umullb	$SVE_ACC4,$SVE_IN23_0,${SVE_R4}[2]  // remember - order changed from Neon impl.
+	umullb	$SVE_ACC4,$SVE_IN23_0,${SVE_R4}[2]
 	umullb	$SVE_ACC3,$SVE_IN23_0,${SVE_R3}[2]
 	umullb	$SVE_ACC2,$SVE_IN23_0,${SVE_R2}[2]
 	umullb	$SVE_ACC1,$SVE_IN23_0,${SVE_R1}[2]
@@ -1463,7 +1471,6 @@ poly1305_blocks_sve2:
 
 	////////////////////////////////////////////////////////////////
 	// (hash+inp[0:1])*r^4 and accumulate
-	// Here R1-S3 index remains unchanged from Neon impl.
 
 	add 	$SVE_IN01_1,$SVE_IN01_1,$SVE_H1
 	umlalb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[0]
@@ -1499,7 +1506,7 @@ poly1305_blocks_sve2:
 	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[0]
 	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[0]
 
-	// Load and convert new input batch - to be removed when I implement new tail procedure
+	// Load and convert new input batch
 	lsr		x15,$len,#4
 	whilelo	p1.s,xzr,x15
 	ld4w	{ z9.s-z12.s }, p1/z, [$inp]		// Loading all blocks at once
@@ -1551,7 +1558,7 @@ poly1305_blocks_sve2:
 	zip1	z12.s,z12.s,${SVE_T0}.s
 	zip1	z13.s,z13.s,${SVE_T0}.s
 
-	subs	$len,$len,#64			// Should also be a func. of vl
+	subs	$len,$len,$vl,lsl #5
 
 	// Lazy reduction
 	bl		poly1305_lazy_reduce_sve2
@@ -1561,7 +1568,7 @@ poly1305_blocks_sve2:
 
 .Lskip_loop_sve2:
 
-	adds	$len,$len,#32
+	adds	$len,$len,$vl,lsl #4		// By half the usual input size
 	b.eq	.Lshort_tail_sve2
 
 .Long_tail_sve2:
@@ -1627,6 +1634,9 @@ poly1305_blocks_sve2:
 	cmp     $vl, #2
     b.ls    .Last_reduce_sve2
 
+	mov		x15,#1
+	whilelo p1.s,xzr,x15
+
 .Loop_reduce_sve2:
 	////////////////////////////////////////////////////////////////
 	// (hash + inp[hi])*r^{vl/2..2}                               //
@@ -1634,10 +1644,29 @@ poly1305_blocks_sve2:
 	//  iterative reduction part of the short tail                //
 	////////////////////////////////////////////////////////////////
 	// Skipped for 128-bit case (vl==2)
-	// Load the correct r-power - currently assuming 256-bit width,
-	// so using r^2, assuming it's at lane 2. 
+	// Load the intermediate r-power into the 0th lanes of vectors
+	ldr		w10,[$pwr]
+	cpy		$SVE_R0,p1/m,w10
+	ldr		w11,[$pwr,#28]
+	cpy		$SVE_R1,p1/m,w11
+	ldr		w12,[$pwr,#56]
+	cpy		$SVE_R2,p1/m,w12
+	ldr		w13,[$pwr,#84]
+	cpy		$SVE_R3,p1/m,w13
+	ldr		w14,[$pwr,#112]
+	cpy		$SVE_R4,p1/m,w14
+	add		$pwr,$pwr,#4			// Increment pointer for the next iteration
 
-	// TODO: Increment $pwr
+	dup		z0.q,z0.q[0]
+	dup		z1.q,z1.q[0]
+	dup		z3.q,z3.q[0]
+	dup		z5.q,z5.q[0]
+	dup		z7.q,z7.q[0]
+
+	adr     $SVE_S1,[$SVE_R1,$SVE_R1,lsl #2]
+	adr     $SVE_S2,[$SVE_R2,$SVE_R2,lsl #2]
+	adr     $SVE_S3,[$SVE_R3,$SVE_R3,lsl #2]
+	adr     $SVE_S4,[$SVE_R4,$SVE_R4,lsl #2]
 
 	add 	$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
 	add 	$SVE_IN01_1,$SVE_IN01_1,$SVE_H1
@@ -1645,35 +1674,35 @@ poly1305_blocks_sve2:
 	add 	$SVE_IN01_3,$SVE_IN01_3,$SVE_H3
 	add 	$SVE_IN01_4,$SVE_IN01_4,$SVE_H4
 
-	umullb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[2]
-	umullb	$SVE_ACC4,$SVE_IN01_0,${SVE_R4}[2]
-	umullb	$SVE_ACC2,$SVE_IN01_0,${SVE_R2}[2]
-	umullb	$SVE_ACC0,$SVE_IN01_0,${SVE_R0}[2]
-	umullb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[2]
+	umullb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[0]
+	umullb	$SVE_ACC4,$SVE_IN01_0,${SVE_R4}[0]
+	umullb	$SVE_ACC2,$SVE_IN01_0,${SVE_R2}[0]
+	umullb	$SVE_ACC0,$SVE_IN01_0,${SVE_R0}[0]
+	umullb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[0]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[2]
-	umlalb	$SVE_ACC4,$SVE_IN01_1,${SVE_R3}[2]
-	umlalb	$SVE_ACC0,$SVE_IN01_1,${SVE_S4}[2]
-	umlalb	$SVE_ACC2,$SVE_IN01_1,${SVE_R1}[2]
-	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[2]
+	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[0]
+	umlalb	$SVE_ACC4,$SVE_IN01_1,${SVE_R3}[0]
+	umlalb	$SVE_ACC0,$SVE_IN01_1,${SVE_S4}[0]
+	umlalb	$SVE_ACC2,$SVE_IN01_1,${SVE_R1}[0]
+	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[0]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[2]
-	umlalb	$SVE_ACC0,$SVE_IN01_2,${SVE_S3}[2]
-	umlalb	$SVE_ACC4,$SVE_IN01_2,${SVE_R2}[2]
-	umlalb	$SVE_ACC1,$SVE_IN01_2,${SVE_S4}[2]
-	umlalb	$SVE_ACC2,$SVE_IN01_2,${SVE_R0}[2]
+	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[0]
+	umlalb	$SVE_ACC0,$SVE_IN01_2,${SVE_S3}[0]
+	umlalb	$SVE_ACC4,$SVE_IN01_2,${SVE_R2}[0]
+	umlalb	$SVE_ACC1,$SVE_IN01_2,${SVE_S4}[0]
+	umlalb	$SVE_ACC2,$SVE_IN01_2,${SVE_R0}[0]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[2]
-	umlalb	$SVE_ACC0,$SVE_IN01_3,${SVE_S2}[2]
-	umlalb	$SVE_ACC4,$SVE_IN01_3,${SVE_R1}[2]
-	umlalb	$SVE_ACC1,$SVE_IN01_3,${SVE_S3}[2]
-	umlalb	$SVE_ACC2,$SVE_IN01_3,${SVE_S4}[2]
+	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[0]
+	umlalb	$SVE_ACC0,$SVE_IN01_3,${SVE_S2}[0]
+	umlalb	$SVE_ACC4,$SVE_IN01_3,${SVE_R1}[0]
+	umlalb	$SVE_ACC1,$SVE_IN01_3,${SVE_S3}[0]
+	umlalb	$SVE_ACC2,$SVE_IN01_3,${SVE_S4}[0]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_4,${SVE_S4}[2]
-	umlalb	$SVE_ACC0,$SVE_IN01_4,${SVE_S1}[2]
-	umlalb	$SVE_ACC4,$SVE_IN01_4,${SVE_R0}[2]
-	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[2]
-	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[2]
+	umlalb	$SVE_ACC3,$SVE_IN01_4,${SVE_S4}[0]
+	umlalb	$SVE_ACC0,$SVE_IN01_4,${SVE_S1}[0]
+	umlalb	$SVE_ACC4,$SVE_IN01_4,${SVE_R0}[0]
+	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[0]
+	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[0]
 
 	// Lazy reduction
 	bl		poly1305_lazy_reduce_sve2
@@ -1699,8 +1728,6 @@ poly1305_blocks_sve2:
 	//       \________________/                                   //
 	//  Final part of the short tail                              //
 	////////////////////////////////////////////////////////////////
-	// TODO: Load r^2 and r^1 into appropriate positions...
-	// for 128-bit currently this is currently in [1] and [3]
 
 	//Last hash addition - now everything stored in SVE_Hx
 	add 	$SVE_H0,$SVE_H0,$SVE_IN01_0
@@ -1711,8 +1738,6 @@ poly1305_blocks_sve2:
 
 	// Shift even lanes to odd lanes and set even to zero
 	//  because r^2 and r^1 are in lanes 1 and 3 of R-vectors
-	//  TODO: This will probably change - need to think where to load...
-	// Hoping SVE_MASK is all-zero here
 	trn1	$SVE_H0,${SVE_MASK}.s,$SVE_H0
 	trn1	$SVE_H1,${SVE_MASK}.s,$SVE_H1
 	trn1	$SVE_H2,${SVE_MASK}.s,$SVE_H2
