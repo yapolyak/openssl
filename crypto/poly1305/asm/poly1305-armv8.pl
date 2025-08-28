@@ -961,25 +961,13 @@ poly1305_sw_2_26:
     str		w10,[x5]				// Store r0
     bfi		x11,$r1,#18,#8			// w11 -> r1
     ubfx    x12,$r1,#8,#26			// w12 -> r2
-	add	w10,w11,w11,lsl#2			// calc r1*5 - delete me!
-    //str		w11,[x5,#28]			// Store r1
-    str		w11,[x5,#16*1]			// Store r1 - delete me!
-    str		w10,[x5,#16*2]			// store r1*5 - delete me!
-	add	w11,w12,w12,lsl#2			// calc r2*5 - delete me!
+    str		w11,[x5,#28]			// Store r1
     lsr		x13,$r1,#34				// w13 : top 10 bits of r1
-    //str		w12,[x5,#56]			// Store r2
-    str		w12,[x5,#16*3]			// Store r2 - delete me!
+    str		w12,[x5,#56]			// Store r2
     bfi     x13,$r2,#10,#16			// w13 -> r3
-    str		w11,[x5,#16*4]			// store r2*5 - delete me!
-	add	w10,w13,w13,lsl#2			// calc r3*5 - delete me!
     lsr		x14,$r2,#16				// w14 -> r4
-    //str		w13,[x5,#84]			// Store r3
-    str		w13,[x5,#16*5]			// Store r3 - delete me!
-	add	w11,w14,w14,lsl#2			// calc r4*5 - delete me!
-    str		w10,[x5,#16*6]			// store r3*5 - delete me!
-    //str		w14,[x5,#112]			// Store r4
-    str		w14,[x5,#16*7]			// Store r4 - delete me!
-    str		w11,[x5,#16*8]			// store r4*5 - delete me!
+    str		w13,[x5,#84]			// Store r3
+    str		w14,[x5,#112]			// Store r4
     ret
 .size   poly1305_sw_2_26,.-poly1305_sw_2_26
 
@@ -1208,7 +1196,7 @@ poly1305_blocks_sve2:
 
 .align	4
 .Lzero_padbit_sve2:
-	str	xzr,[$ctx,#24]
+	str	xzr,[$ctx,#24]			// Could it ever be that we need r-powers after?
 	b	.Lno_data_sve2
 
 .align	4
@@ -1227,8 +1215,7 @@ poly1305_blocks_sve2:
 .Linit_sve2:
 	# Calculating and storing powers of `r`.
 	ldr w5,[$ctx,#28]		// Load top power (if exists - 0 by default)
-	//add $pwr,$ctx,#48+28	// Point to the end of powers allocation
-	add $pwr,$ctx,#48+16	// Delete me!
+	add $pwr,$ctx,#48+28	// Point to the end of powers allocation (1st lobe)
 
 	mov $mask,#-1
 	lsr $mask,$mask,#20		//2^44-1
@@ -1242,34 +1229,9 @@ poly1305_blocks_sve2:
 	and	$r0,$r0,$mask
 	and	$r1,$r1,$mask
 
-	//mov	x4,$vl		// uncomment me!
+	mov	x4,$vl
 	add	x5,$pwr,#-4
 	bl	poly1305_sw_2_26
-
-	//!!! Remove me later !!!
-	// Calculate r^3 for consistency with old impl.
-	ldp	$r0,$r1,[$ctx,#32]	// re-load key value
-	mov	$h0,$r0				// r^1
-	add	$s1,$r1,$r1,lsr#2	// s1 = r1 + (r1 >> 2) : r1 * (5/4) base2_64
-	mov	$h1,$r1
-	mov	$h2,xzr
-	bl	poly1305_mult		// r^2
-	bl	poly1305_mult		// r^3
-	add	$ctx,$ctx,#48+8
-	bl	poly1305_splat
-	sub	$ctx,$ctx,#48+8		// restore $ctx
-
-	ldp	$r0,$r1,[$ctx,#32]	// re-re-load key value
-
-	lsr	$r2,$r1,#24			// base2_64 -> base2_44
-	extr	$r1,$r1,$r0,#44
-	and	$r0,$r0,$mask
-	and	$r1,$r1,$mask
-
-	cntd	$vl		// x16 is overwritten in poly1305_splat!
-	mov	x4,$vl
-	add	x5,$pwr,#-8
-	//!!! Remove me later !!!
 
 .Loop_pwrs_sqr:
 	lsr	x4,x4,#1
@@ -1282,8 +1244,6 @@ poly1305_blocks_sve2:
 	str	w5,[$ctx,#28]
 
 .Lpwrs_precomputed:
-	add	$pwr,$pwr,x5
-
 	ldp	$h0,$h1,[$ctx]		// load hash value base 2^64
 	ldr $h2,[$ctx,#16]
 
@@ -1308,7 +1268,6 @@ poly1305_blocks_sve2:
 
 	// Using Neon's fmov here for speed.
 	//  We only need the low 26 bits in the first step so no need for post-mov reshuffle.
-	//  When extending to 4-way (256-bit version), insr + zip1 would be needed afterwards.
 	fmov	d24,x10		// H0
 	fmov	d25,x11		// H1
 	fmov	d26,x12		// H2
@@ -1318,16 +1277,11 @@ poly1305_blocks_sve2:
 	ldr	x30,[sp,#8]		// Should I do this earlier after r^x calcs?
 
 	mov	x4,#1
-	stur	x4,[$ctx,#24]		// set is_base2_26
+	stur	w4,[$ctx,#24]		// set is_base2_26
 	b	.Ldo_sve2
 
 .align	4
 .Leven_sve2:
-	ldr w5,[$ctx,#28]		// Load top power (if exists - 0 by default)
-	//add $pwr,$ctx,#48+28	// Point to the end of powers allocation
-	add $pwr,$ctx,#48+16	// Delete me!
-	add	$pwr,$pwr,x5
-
 	stp	d8,d9,[sp,#80]		// meet ABI requirements
 	stp	d10,d11,[sp,#96]
 	stp	d12,d13,[sp,#112]
@@ -1348,23 +1302,48 @@ poly1305_blocks_sve2:
 .Ldo_sve2:
     ptrue   p0.b, ALL               		// Set all-true predicate
 
-	// Load r-powers. !NEEDS CHANGES FOR VLA!
-	// while LD4W { <Zt1>.S, <Zt2>.S, <Zt3>.S, <Zt4>.S }, <Pg>/Z, [<Xn|SP>{, #<imm>, MUL VL}]
-	// exists in FEAT_SVE, it de-interleaves - one would need to re-write poly1305_splat.
-	// Contiguous load exists in FEAT_SVE2v1, this should be possible in the future:
-	// LD1W { <Zt1>.S-<Zt2>.S }, <PNg>/Z, [<Xn|SP>{, #<imm>, MUL VL}]
-	// For now will have to live with the following:
-	add	x15,$ctx,#48
-	ld1w	{ $SVE_R0 }, p0/z, [x15]            
-	ld1w	{ $SVE_R1 }, p0/z, [x15, #1, MUL VL]
-	ld1w	{ $SVE_S1 }, p0/z, [x15, #2, MUL VL]
-	ld1w	{ $SVE_R2 }, p0/z, [x15, #3, MUL VL]
-	ld1w	{ $SVE_S2 }, p0/z, [x15, #4, MUL VL]
-	ld1w	{ $SVE_R3 }, p0/z, [x15, #5, MUL VL]
-	ld1w	{ $SVE_S3 }, p0/z, [x15, #6, MUL VL]
-	ld1w	{ $SVE_R4 }, p0/z, [x15, #7, MUL VL]
-	add 	x15, x15, #128     // [x15, #8, MUL VL] would be out of bounds..
-	ld1w	{ $SVE_S4 }, p0/z, [x15]
+	// Load r-powers.
+	ldr 	w5,[$ctx,#28]
+	sxtw	x5,w5				// Zero-extend
+	add 	$pwr,$ctx,#48+28
+	add		x10,$ctx,#48+20		// Pointer to r^2.
+	add		$pwr,$pwr,x5
+	mov		x15,#2
+	whilelo	p1.s,xzr,x15
+
+	ld1w	{ $SVE_R0 },p1/z,[$pwr]
+	ld1w	{ $SVE_T0.s },p1/z,[x10]
+	add		$pwr,$pwr,#28
+	add		x10,x10,#28
+	zip1	$SVE_R0,$SVE_R0,$SVE_T0.s
+
+	ld1w	{ $SVE_R1 },p1/z,[$pwr]
+	ld1w	{ $SVE_T1.s },p1/z,[x10]
+	add		$pwr,$pwr,#28
+	add		x10,x10,#28
+	zip1	$SVE_R1,$SVE_R1,$SVE_T1.s
+	adr     $SVE_S1,[$SVE_R1,$SVE_R1,lsl #2]
+
+	ld1w	{ $SVE_R2 },p1/z,[$pwr]
+	ld1w	{ $SVE_T1.s },p1/z,[x10]
+	add		$pwr,$pwr,#28
+	add		x10,x10,#28
+	zip1	$SVE_R2,$SVE_R2,$SVE_T1.s
+	adr     $SVE_S2,[$SVE_R2,$SVE_R2,lsl #2]
+
+	ld1w	{ $SVE_R3 },p1/z,[$pwr]
+	ld1w	{ $SVE_T1.s },p1/z,[x10]
+	add		$pwr,$pwr,#28
+	add		x10,x10,#28
+	zip1	$SVE_R3,$SVE_R3,$SVE_T1.s
+	adr     $SVE_S3,[$SVE_R3,$SVE_R3,lsl #2]
+
+	ld1w	{ $SVE_R4 },p1/z,[$pwr]
+	ld1w	{ $SVE_T1.s },p1/z,[x10]
+	add		$pwr,$pwr,#28
+	add		x10,x10,#28
+	zip1	$SVE_R4,$SVE_R4,$SVE_T1.s
+	adr     $SVE_S4,[$SVE_R4,$SVE_R4,lsl #2]
 
 	//Adjust $pwr accordingly
 	//add	$pwr,$pwr,4
@@ -1449,38 +1428,38 @@ poly1305_blocks_sve2:
 	// Is it the right place to do this?
 	add		$inp,$inp,$vl,lsl #5	// Half vector width * 32
 
-	umullb  $SVE_ACC4,$SVE_IN23_0,${SVE_R4}[1]  // remember - order changed from Neon impl.
-	umullb	$SVE_ACC3,$SVE_IN23_0,${SVE_R3}[1]
-	umullb	$SVE_ACC2,$SVE_IN23_0,${SVE_R2}[1]
-	umullb	$SVE_ACC1,$SVE_IN23_0,${SVE_R1}[1]
-	umullb	$SVE_ACC0,$SVE_IN23_0,${SVE_R0}[1]
+	umullb	$SVE_ACC4,$SVE_IN23_0,${SVE_R4}[2]  // remember - order changed from Neon impl.
+	umullb	$SVE_ACC3,$SVE_IN23_0,${SVE_R3}[2]
+	umullb	$SVE_ACC2,$SVE_IN23_0,${SVE_R2}[2]
+	umullb	$SVE_ACC1,$SVE_IN23_0,${SVE_R1}[2]
+	umullb	$SVE_ACC0,$SVE_IN23_0,${SVE_R0}[2]
 
-	umlalb	$SVE_ACC4,$SVE_IN23_1,${SVE_R3}[1]
-	umlalb	$SVE_ACC3,$SVE_IN23_1,${SVE_R2}[1]
-	umlalb	$SVE_ACC2,$SVE_IN23_1,${SVE_R1}[1]
-	umlalb	$SVE_ACC1,$SVE_IN23_1,${SVE_R0}[1]
-	umlalb	$SVE_ACC0,$SVE_IN23_1,${SVE_S4}[1]
+	umlalb	$SVE_ACC4,$SVE_IN23_1,${SVE_R3}[2]
+	umlalb	$SVE_ACC3,$SVE_IN23_1,${SVE_R2}[2]
+	umlalb	$SVE_ACC2,$SVE_IN23_1,${SVE_R1}[2]
+	umlalb	$SVE_ACC1,$SVE_IN23_1,${SVE_R0}[2]
+	umlalb	$SVE_ACC0,$SVE_IN23_1,${SVE_S4}[2]
 
-	umlalb	$SVE_ACC4,$SVE_IN23_2,${SVE_R2}[1]
-	umlalb	$SVE_ACC3,$SVE_IN23_2,${SVE_R1}[1]
-	umlalb	$SVE_ACC2,$SVE_IN23_2,${SVE_R0}[1]
-	umlalb	$SVE_ACC1,$SVE_IN23_2,${SVE_S4}[1]
-	umlalb	$SVE_ACC0,$SVE_IN23_2,${SVE_S3}[1]
+	umlalb	$SVE_ACC4,$SVE_IN23_2,${SVE_R2}[2]
+	umlalb	$SVE_ACC3,$SVE_IN23_2,${SVE_R1}[2]
+	umlalb	$SVE_ACC2,$SVE_IN23_2,${SVE_R0}[2]
+	umlalb	$SVE_ACC1,$SVE_IN23_2,${SVE_S4}[2]
+	umlalb	$SVE_ACC0,$SVE_IN23_2,${SVE_S3}[2]
 
-	umlalb	$SVE_ACC4,$SVE_IN23_3,${SVE_R1}[1]
-	umlalb	$SVE_ACC3,$SVE_IN23_3,${SVE_R0}[1]
-	umlalb	$SVE_ACC2,$SVE_IN23_3,${SVE_S4}[1]
-	umlalb	$SVE_ACC1,$SVE_IN23_3,${SVE_S3}[1]
-	umlalb	$SVE_ACC0,$SVE_IN23_3,${SVE_S2}[1]
+	umlalb	$SVE_ACC4,$SVE_IN23_3,${SVE_R1}[2]
+	umlalb	$SVE_ACC3,$SVE_IN23_3,${SVE_R0}[2]
+	umlalb	$SVE_ACC2,$SVE_IN23_3,${SVE_S4}[2]
+	umlalb	$SVE_ACC1,$SVE_IN23_3,${SVE_S3}[2]
+	umlalb	$SVE_ACC0,$SVE_IN23_3,${SVE_S2}[2]
 
 	// In original impl. for some reason it starts from IN01_2.
 	// I decided to start from _0 as it simplifies the load of next-iteration input...
 	add 	$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
-	umlalb	$SVE_ACC4,$SVE_IN23_4,${SVE_R0}[1]
-	umlalb	$SVE_ACC3,$SVE_IN23_4,${SVE_S4}[1]
-	umlalb	$SVE_ACC2,$SVE_IN23_4,${SVE_S3}[1]
-	umlalb	$SVE_ACC1,$SVE_IN23_4,${SVE_S2}[1]
-	umlalb	$SVE_ACC0,$SVE_IN23_4,${SVE_S1}[1]
+	umlalb	$SVE_ACC4,$SVE_IN23_4,${SVE_R0}[2]
+	umlalb	$SVE_ACC3,$SVE_IN23_4,${SVE_S4}[2]
+	umlalb	$SVE_ACC2,$SVE_IN23_4,${SVE_S3}[2]
+	umlalb	$SVE_ACC1,$SVE_IN23_4,${SVE_S2}[2]
+	umlalb	$SVE_ACC0,$SVE_IN23_4,${SVE_S1}[2]
 
 	////////////////////////////////////////////////////////////////
 	// (hash+inp[0:1])*r^4 and accumulate
@@ -1601,35 +1580,35 @@ poly1305_blocks_sve2:
 	add 	$SVE_IN01_3,$SVE_IN01_3,$SVE_H3
 	add 	$SVE_IN01_4,$SVE_IN01_4,$SVE_H4
 
-	umullb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[1]
-	umullb	$SVE_ACC4,$SVE_IN01_0,${SVE_R4}[1]
-	umullb	$SVE_ACC2,$SVE_IN01_0,${SVE_R2}[1]
-	umullb	$SVE_ACC0,$SVE_IN01_0,${SVE_R0}[1]
-	umullb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[1]
+	umullb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[2]
+	umullb	$SVE_ACC4,$SVE_IN01_0,${SVE_R4}[2]
+	umullb	$SVE_ACC2,$SVE_IN01_0,${SVE_R2}[2]
+	umullb	$SVE_ACC0,$SVE_IN01_0,${SVE_R0}[2]
+	umullb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[2]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[1]
-	umlalb	$SVE_ACC4,$SVE_IN01_1,${SVE_R3}[1]
-	umlalb	$SVE_ACC0,$SVE_IN01_1,${SVE_S4}[1]
-	umlalb	$SVE_ACC2,$SVE_IN01_1,${SVE_R1}[1]
-	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[1]
+	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[2]
+	umlalb	$SVE_ACC4,$SVE_IN01_1,${SVE_R3}[2]
+	umlalb	$SVE_ACC0,$SVE_IN01_1,${SVE_S4}[2]
+	umlalb	$SVE_ACC2,$SVE_IN01_1,${SVE_R1}[2]
+	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[2]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[1]
-	umlalb	$SVE_ACC0,$SVE_IN01_2,${SVE_S3}[1]
-	umlalb	$SVE_ACC4,$SVE_IN01_2,${SVE_R2}[1]
-	umlalb	$SVE_ACC1,$SVE_IN01_2,${SVE_S4}[1]
-	umlalb	$SVE_ACC2,$SVE_IN01_2,${SVE_R0}[1]
+	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[2]
+	umlalb	$SVE_ACC0,$SVE_IN01_2,${SVE_S3}[2]
+	umlalb	$SVE_ACC4,$SVE_IN01_2,${SVE_R2}[2]
+	umlalb	$SVE_ACC1,$SVE_IN01_2,${SVE_S4}[2]
+	umlalb	$SVE_ACC2,$SVE_IN01_2,${SVE_R0}[2]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[1]
-	umlalb	$SVE_ACC0,$SVE_IN01_3,${SVE_S2}[1]
-	umlalb	$SVE_ACC4,$SVE_IN01_3,${SVE_R1}[1]
-	umlalb	$SVE_ACC1,$SVE_IN01_3,${SVE_S3}[1]
-	umlalb	$SVE_ACC2,$SVE_IN01_3,${SVE_S4}[1]
+	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[2]
+	umlalb	$SVE_ACC0,$SVE_IN01_3,${SVE_S2}[2]
+	umlalb	$SVE_ACC4,$SVE_IN01_3,${SVE_R1}[2]
+	umlalb	$SVE_ACC1,$SVE_IN01_3,${SVE_S3}[2]
+	umlalb	$SVE_ACC2,$SVE_IN01_3,${SVE_S4}[2]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_4,${SVE_S4}[1]
-	umlalb	$SVE_ACC0,$SVE_IN01_4,${SVE_S1}[1]
-	umlalb	$SVE_ACC4,$SVE_IN01_4,${SVE_R0}[1]
-	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[1]
-	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[1]
+	umlalb	$SVE_ACC3,$SVE_IN01_4,${SVE_S4}[2]
+	umlalb	$SVE_ACC0,$SVE_IN01_4,${SVE_S1}[2]
+	umlalb	$SVE_ACC4,$SVE_IN01_4,${SVE_R0}[2]
+	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[2]
+	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[2]
 
 	// Lazy reduction
 	bl		poly1305_lazy_reduce_sve2
