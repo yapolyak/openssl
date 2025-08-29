@@ -928,12 +928,6 @@ poly1305_emit_neon:
 ___
 
 # --- SVE2 Section ---
-# SVE2 implementation of the 2-way poly1305 parallelism, requiring 128-bit registers.
-# SVE implementation seems to be out of the question due to the lack of widening multiplications.
-# One should not expect 2-way SVE2 implementation to be faster than Neon implementation.
-# In fact, benchmarks on Graviton4 show that it is about 5% less efficient (0.65 vs 0.62 cpb).
-# Therefore the primary motivation is to create a blueprint for a 256-bit SVE2 implementation,
-#  that would require a 4-way Horner's method parallelism.
 
 $code .= ".arch armv8-a+sve2\n";
 
@@ -951,30 +945,56 @@ my ($pwr,$mask) = map("x$_",(25..26));
 my $is_base2_26 = "w17";
 
 $code.=<<___;
+// --- poly1305_sw_2_26 ---
+// Performs conversion of 3 base2_44 to 5 base2_26 scalars and
+//  stores them in memory at adresses [x5], [x5,#26], [x5,#56],
+//  [x5,#84] and [x5,#112].
+//
+// This is a leaf function and does not modify stack.
+//
+// Calling Convention:
+//   Inputs:
+//     x5: Pointer into memory where 1st value should be stored.
+//     x7-x9: The three base2_44 scalar values (r0-r2)
+//   Clobbers (uses as temporaries):
+//     x10-x15
 .type	poly1305_sw_2_26,%function
 .align	5
 poly1305_sw_2_26:
 	// Converts 3 base2_44 -> 5 base2_26 values and stores
-    mov		x15,#0x3ffffff			// w15  : 2^26-1 mask
-    and		x10,$r0,x15				// w10 -> r0
-    lsr		x11,$r0,#26				// w11 : top 18 bits of r0
-    str		w10,[x5]				// Store r0
-    bfi		x11,$r1,#18,#8			// w11 -> r1
-    ubfx    x12,$r1,#8,#26			// w12 -> r2
-    str		w11,[x5,#28]			// Store r1
-    lsr		x13,$r1,#34				// w13 : top 10 bits of r1
-    str		w12,[x5,#56]			// Store r2
-    bfi     x13,$r2,#10,#16			// w13 -> r3
-    lsr		x14,$r2,#16				// w14 -> r4
-    str		w13,[x5,#84]			// Store r3
-    str		w14,[x5,#112]			// Store r4
-    ret
+	mov		x15,#0x3ffffff			// w15  : 2^26-1 mask
+	and		x10,$r0,x15				// w10 -> r0
+	lsr		x11,$r0,#26				// w11 : top 18 bits of r0
+	str		w10,[x5]				// Store r0
+	bfi		x11,$r1,#18,#8			// w11 -> r1
+	ubfx	x12,$r1,#8,#26			// w12 -> r2
+	str		w11,[x5,#28]			// Store r1
+	lsr		x13,$r1,#34				// w13 : top 10 bits of r1
+	str		w12,[x5,#56]			// Store r2
+	bfi		x13,$r2,#10,#16			// w13 -> r3
+	lsr		x14,$r2,#16				// w14 -> r4
+	str		w13,[x5,#84]			// Store r3
+	str		w14,[x5,#112]			// Store r4
+	ret
 .size   poly1305_sw_2_26,.-poly1305_sw_2_26
 
+// --- poly1305_sqr_2_44 ---
+// Calculates base2_44 squaring operation.
+//
+// This is a leaf function and does not modify stack.
+// It however uses callee-saved registers as scratch, so those must be
+//  saved on stack prior to calling.
+//
+// Calling Convention:
+//   Inputs:
+//     x7-x9: The three base2_44 scalar values (r0-r2)
+//   Outputs:
+//     x7-x9: The three base2_44 scalar values, squared (r0-r2)
+//   Clobbers (uses as temporaries):
+//     x10-x15, x19-x24, x26
 .type	poly1305_sqr_2_44,%function
 .align	5
 poly1305_sqr_2_44:
-	// Calculates base2_44 squaring operation.
 
     // Pre-calculate constants and doubled terms.
 	mov		x12,#20
@@ -985,7 +1005,7 @@ poly1305_sqr_2_44:
     // --- Calculate d2 = r1*r1 + 2*r0*r2 ---
 	umulh	$cs5,$r1,$r1	// high part of r1*r1
 	mul		$cs4,$r1,$r1	// low part of r1*r1
-	umulh	x15,x10,$r2		// high part of (r0*2)*r2 - ?OK to use x15?
+	umulh	x15,x10,$r2		// high part of (r0*2)*r2
 	mul		x14,x10,$r2		// low part of (r0*2)*r2
 
     // --- Calculate d0 = r0*r0 + 20*(2*r1*r2) ---
@@ -1108,6 +1128,14 @@ poly1305_lazy_reduce_sve2:
     ret
 .size	poly1305_lazy_reduce_sve2,.-poly1305_lazy_reduce_sve2
 
+// --- poly1305_blocks_sve2 ---
+// Main function, implementing POLY1305 algorithm as discussed
+// in "NEON crypto" by D.J. Bernstein and P. Schwabe, in a VLA fashion,
+// using SVE2.
+//
+// It is mostly a port-and-merge of the 128-bit Neon implementation herein and
+//  a VLA risc-v implementation in https://github.com/dot-asm/cryptogams.
+//
 .type	poly1305_blocks_sve2,%function
 .align	5
 poly1305_blocks_sve2:
@@ -1115,10 +1143,10 @@ poly1305_blocks_sve2:
 	AARCH64_VALID_CALL_TARGET
 	ldr	$is_base2_26,[$ctx,#24]
 	// Estimate vector width and branch to scalar if input too short
-	cntd	$vl				// vector width in 64-bit lanes (vl)
-	lsl	$vl0,$vl,#4			// vl * 16 (bytes per vector input blocks) 
-	//mov $vl1,$vl0,lsl #2	// 4 * vl * 16
-	add $vl1,$vl0,$vl0,lsl #1	// 3 * vl * 16 
+	cntd	$vl					// vector width in 64-bit lanes (vl)
+	lsl	$vl0,$vl,#4				// vl * 16 (bytes per vector input blocks) 
+	//mov $vl1,$vl0,lsl #2		// 4 * vl * 16 - threshold in Neon impl.
+	add $vl1,$vl0,$vl0,lsl #1	// 3 * vl * 16 - new threshold.
 	cmp	$len,$vl1
 	b.hs	.Lblocks_sve2
 	cbz	$is_base2_26,.Lpoly1305_blocks	// if in base 2^26 - proceed
@@ -1171,7 +1199,7 @@ poly1305_blocks_sve2:
 	stp	$h0,$h1,[$ctx]			// store hash value base 2^64
 	str	$h2,[$ctx,#16]
 
-	bl	poly1305_blocks
+	bl	poly1305_blocks			// Calculate the scalar "head"
 	ldp	$len,$inp,[sp],#16		// Recover updated length and input ptr
 	ldr	x30,[sp,#8]
 
@@ -1187,7 +1215,7 @@ poly1305_blocks_sve2:
 	ubfx	x13,$h1,#14,#26
 	extr	x14,$h2,$h1,#40
 
-	cbnz	$len,.Leven_sve2	// never happens?
+	cbnz	$len,.Leven_sve2
 
 	stp	w10,w11,[$ctx]			// store hash value base 2^26
 	stp	w12,w13,[$ctx,#8]
@@ -1213,7 +1241,15 @@ poly1305_blocks_sve2:
 	ldp	$len,$inp,[sp],#16		// Recover updated length and input ptr
 
 .Linit_sve2:
-	# Calculating and storing powers of `r`.
+	// Calculating and storing r-powers (powers of a key).
+	// The layout of how r-powers are stored in memory:
+	//////////////////////////////////////////////////////////////////////////////////////
+	//                   lobe 1                           lobe 2                   etc. //
+	//      | .. r^{max},r^{max/2},...,r^2,r | .. r^{max},r^{max/2},...,r^2,r | ..      //
+	//     / \                              / \                              / \        //
+	//  [$ctx,48]                       [$ctx,48+28]                     [$ctx,48+56]   //
+	//////////////////////////////////////////////////////////////////////////////////////
+
 	ldr w5,[$ctx,#28]		// Load top power (if exists - 0 by default)
 	add $pwr,$ctx,#48+28	// Point to the end of powers allocation (1st lobe)
 
@@ -1282,6 +1318,7 @@ poly1305_blocks_sve2:
 
 .align	4
 .Leven_sve2:
+	// In principle all this could be moved to Ldo_sve2?
 	stp	d8,d9,[sp,#80]		// meet ABI requirements
 	stp	d10,d11,[sp,#96]
 	stp	d12,d13,[sp,#112]
@@ -1303,11 +1340,22 @@ poly1305_blocks_sve2:
     ptrue   p0.b, ALL               		// Set all-true predicate
 
 	// Load r-powers.
+	// They are stored in five lobes, in the order r^{max},...,r^2,r^1 each.
+	// We need specific powers to be at specific R- and S-vector indices.
+	// Hence we can't load all of them, an arbitrary amount, dependent on VL.
+	// Instead we load {r^{max},r^{max/2}} and {r^2,r^1} in batches,
+	//  and then interleave them using zip1 as {r^{max},r^2,r^{max/2},r}.
+	// We don't really care where r^{max} and r^{max/2} are, but we want
+	//  r^2 and r to be in either even or odd lanes. We chose lanes 1 and 3.
+	// Intermediate r-powers (r^{max/4},..,r^4), if applicable, will be
+	//  reloaded into lane 0 iteratively in Loop_reduce_sve2.
+
 	ldr 	w5,[$ctx,#28]
 	sxtw	x5,w5				// Zero-extend
-	add 	$pwr,$ctx,#48+28
+	add 	$pwr,$ctx,#48+28	// Pointer to the end of the r-powers 1st lobe
 	add		x10,$ctx,#48+20		// Pointer to r^2.
-	add		$pwr,$pwr,x5
+	add		$pwr,$pwr,x5		// Pointer to the r^{max}
+
 	mov		x15,#2
 	whilelo	p1.s,xzr,x15
 
@@ -1339,10 +1387,10 @@ poly1305_blocks_sve2:
 
 	ld1w	{ $SVE_R4 },p1/z,[$pwr]
 	ld1w	{ $SVE_T0.s },p1/z,[x10]
-	sub		$pwr,$pwr,#104						// Adjust to 1st lobe, 3d power
+	sub		$pwr,$pwr,#104				// Adjust to 1st lobe, 3d power
 	zip1	$SVE_R4,$SVE_R4,$SVE_T0.s
 
-	// Broadcast r-powers loaded above to higher parts of the vectors.
+	// Broadcast r-powers loaded above to higher parts of the R-vectors.
 	cmp		$vl,#2
 	b.eq	.L_skip_dup_broadcast
 	dup		z0.q,z0.q[0]
@@ -1352,6 +1400,7 @@ poly1305_blocks_sve2:
 	dup		z7.q,z7.q[0]
 
 .L_skip_dup_broadcast:
+	// Calculate S-vectors (r^x*5)
 	adr     $SVE_S1,[$SVE_R1,$SVE_R1,lsl #2]
 	adr     $SVE_S2,[$SVE_R2,$SVE_R2,lsl #2]
 	adr     $SVE_S3,[$SVE_R3,$SVE_R3,lsl #2]
@@ -1394,7 +1443,7 @@ poly1305_blocks_sve2:
 	and		z10.d,z10.d,${SVE_MASK}.d	// Mask l1
 
 	// Now distribute interleaving blocks to two sets of vector registers
-	// I guess I could use T0 as mask and interleave below with above somewhat
+	// I guess it is possible to interleave below with above somewhat
 	eor 	${SVE_T0}.d,${SVE_T0}.d,${SVE_T0}.d	// set zero mask
 
 	// Move high blocks from INlo -> INhi and sparcify (put in even lanes)
@@ -1417,17 +1466,23 @@ poly1305_blocks_sve2:
 
 .align	4
 .Loop_sve2:
-	////////////////////////////////////////////////////////////////
-	// ((inp[0]*r^4+inp[2]*r^2+inp[4])*r^4+inp[6]*r^2
-	// ((inp[1]*r^4+inp[3]*r^2+inp[5])*r^3+inp[7]*r
-	//   \___________________/
-	// ((inp[0]*r^4+inp[2]*r^2+inp[4])*r^4+inp[6]*r^2+inp[8])*r^2
-	// ((inp[1]*r^4+inp[3]*r^2+inp[5])*r^4+inp[7]*r^2+inp[9])*r
-	//   \___________________/ \____________________/
+	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// ((inp[0]*r^{vl*2} + inp[vl]  *r^{vl} + inp[2*vl]  )*r^{vl} + inp[3*vl]  )*r^{vl}
+	//+((inp[1]*r^{vl*2} + inp[vl+1]*r^{vl} + inp[2*vl+1])*r^{vl} + inp[3*vl+1])*r^{vl-1}
+	//+...
+	//   \_______________________________/    \_________________________________________/ 
+	//      first main loop iteration                       long tail
 	//
-	// Note that we start with inp[2:3]*r^2. This is because it
+	// ((inp[0]*r^{vl*2} + inp[vl]  *r^{vl} + inp[2*vl]  )*r^{vl*2} + inp[3*vl]  *r^{vl} + inp[4*vl]  )*r^{vl}
+	//+((inp[1]*r^{vl*2} + inp[vl+1]*r^{vl} + inp[2*vl+1])*r^{vl*2} + inp[3*vl+1]*r^{vl} + inp[4*vl+1])*r^{vl-1}
+	//+...
+	//   \_______________________________/    \________________________________________/   \___________________/
+	//      first main loop iteration             second main loop iteration                    short tail
+	//
+	// Note that we start with inp[vl:vl*2]*r^{vl}, as it
 	// doesn't depend on reduction in previous iteration.
-	////////////////////////////////////////////////////////////////
+	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// Hash-key power product f-la for the 5 limbs in base2^26 representation:
 	// d4 = h0*r4 + h1*r3   + h2*r2   + h3*r1   + h4*r0
 	// d3 = h0*r3 + h1*r2   + h2*r1   + h3*r0   + h4*5*r4
 	// d2 = h0*r2 + h1*r1   + h2*r0   + h3*5*r4 + h4*5*r3
@@ -1460,8 +1515,6 @@ poly1305_blocks_sve2:
 	umlalb	$SVE_ACC1,$SVE_IN23_3,${SVE_S3}[2]
 	umlalb	$SVE_ACC0,$SVE_IN23_3,${SVE_S2}[2]
 
-	// In original impl. for some reason it starts from IN01_2.
-	// I decided to start from _0 as it simplifies the load of next-iteration input...
 	add 	$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
 	umlalb	$SVE_ACC4,$SVE_IN23_4,${SVE_R0}[2]
 	umlalb	$SVE_ACC3,$SVE_IN23_4,${SVE_S4}[2]
@@ -1541,7 +1594,7 @@ poly1305_blocks_sve2:
 	and		z10.d,z10.d,${SVE_MASK}.d	// Mask l1
 
 	// Now distribute interleaving blocks to two sets of vector registers
-	// I guess I could interleave below with above somewhat
+	// I guess it is possible to interleave below with above somewhat
 	eor 	${SVE_T0}.d,${SVE_T0}.d,${SVE_T0}.d	// set zero mask
 
 	// Move high blocks from INlo -> INhi and sparcify (put in even lanes)
@@ -1578,9 +1631,9 @@ poly1305_blocks_sve2:
 	//  first part of long tail                                   //
 	////////////////////////////////////////////////////////////////
 	//NB `vl` here (and in the code) is the vector length in double words.
-	//For now assuming 128-bit width and using r^2.
 
 	// Might want to re-arrange, accoring to the lazy reduction order
+	//  as well as interleave add and mul.
 	add 	$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
 	add 	$SVE_IN01_1,$SVE_IN01_1,$SVE_H1
 	add 	$SVE_IN01_2,$SVE_IN01_2,$SVE_H2
@@ -1622,7 +1675,7 @@ poly1305_blocks_sve2:
 	ldr	x30,[sp,#8]
 
 	// Move INhi -> INlo. Have to refer to as double-words vectors.
-	// Should interleave with above I gather
+	// Should interleave with above I guess
 	mov		z9.d,z14.d	
 	mov		z10.d,z15.d
 	mov		z11.d,z16.d
@@ -1643,7 +1696,15 @@ poly1305_blocks_sve2:
 	//       \____________________/                               //
 	//  iterative reduction part of the short tail                //
 	////////////////////////////////////////////////////////////////
-	// Skipped for 128-bit case (vl==2)
+	// Last column of products is calculated by iteratively "folding" vectors:
+	// 1. If vl==2 - skip to Last_reduce_sve2
+	// 2. calculate product with r^{vl/2} -> ACC{0-4}
+	// 3. lazy reduction -> H{0-4}
+	// 4. upper half of vectors (INlo{0-4}) is copied to lower halfs
+	// 5. If vl/2==2 - go to Last_reduce_sve2
+	// 6. continue with 2.
+	// NB: this part is skipped for 128-bit case (vl==2)
+
 	// Load the intermediate r-power into the 0th lanes of vectors
 	ldr		w10,[$pwr]
 	cpy		$SVE_R0,p1/m,w10
@@ -1724,8 +1785,9 @@ poly1305_blocks_sve2:
 
 .Last_reduce_sve2:
 	////////////////////////////////////////////////////////////////
-	// (hash + inp[hi])*r^{2,1}                                   //
-	//       \________________/                                   //
+	// (hash + inp[n-1])*r^2                                      //
+	//+(hash + inp[n]  )*r                                        //
+	//       \_____________/                                      //
 	//  Final part of the short tail                              //
 	////////////////////////////////////////////////////////////////
 
@@ -1798,9 +1860,10 @@ poly1305_blocks_sve2:
 	uaddv	d21,p2,$SVE_ACC2
 
 	////////////////////////////////////////////////////////////////
-	// lazy reduction, but without narrowing
+	// Lazy reduction, but without narrowing
 
-	// Since results were accumulated in the lower 64 bits, I can refer to them as FP/aSIMD reg-s.
+	// Since results were accumulated in the lower 64 bits,
+	//  one can refer to them as FP/aSIMD reg-s.
 
 	ushr	d29,d22,#26
 	and 	v22.8b,v22.8b,v31.8b
