@@ -932,8 +932,8 @@ ___
 $code .= ".arch armv8-a+sve2\n";
 
 my ($SVE_R0,$SVE_R1,$SVE_S1,$SVE_R2,$SVE_S2,$SVE_R3,$SVE_S3,$SVE_R4,$SVE_S4) = map("z$_.s",(0..8));
-my ($SVE_IN01_0,$SVE_IN01_1,$SVE_IN01_2,$SVE_IN01_3,$SVE_IN01_4) = map("z$_.s",(9..13));
-my ($SVE_IN23_0,$SVE_IN23_1,$SVE_IN23_2,$SVE_IN23_3,$SVE_IN23_4) = map("z$_.s",(14..18));
+my ($SVE_INlo_0,$SVE_INlo_1,$SVE_INlo_2,$SVE_INlo_3,$SVE_INlo_4) = map("z$_.s",(9..13));
+my ($SVE_INhi_0,$SVE_INhi_1,$SVE_INhi_2,$SVE_INhi_3,$SVE_INhi_4) = map("z$_.s",(14..18));
 my ($SVE_ACC0,$SVE_ACC1,$SVE_ACC2,$SVE_ACC3,$SVE_ACC4) = map("z$_.d",(19..23));
 my ($SVE_H0,$SVE_H1,$SVE_H2,$SVE_H3,$SVE_H4) = map("z$_.s",(24..28));
 my ($SVE_T0,$SVE_T1,$SVE_MASK) = map("z$_",(29..31));
@@ -1431,7 +1431,7 @@ poly1305_blocks_sve2:
 	lsr		${SVE_T1}.s,z10.s,#20		// T1 -> z10 >> 20
 	lsl		z10.s,z10.s,#6				// z10 -> upper part of l1
 	lsr		${SVE_T0}.s,z9.s,#26		// T0 -> z9 >> 26
-	and		z9.d,z9.d,${SVE_MASK}.d		// z0 is now final l0
+	and		z9.d,z9.d,${SVE_MASK}.d		// z9 is now final l0
 	orr		z11.d,z11.d,${SVE_T1}.d		// z11 -> final l2
 	orr		z10.d,z10.d,${SVE_T0}.d		// z10 -> final l1
 
@@ -1491,125 +1491,126 @@ poly1305_blocks_sve2:
 
 	add		$inp,$inp,$vl,lsl #5
 
-	umullb	$SVE_ACC4,$SVE_IN23_0,${SVE_R4}[2]
-	umullb	$SVE_ACC3,$SVE_IN23_0,${SVE_R3}[2]
-	umullb	$SVE_ACC2,$SVE_IN23_0,${SVE_R2}[2]
-	umullb	$SVE_ACC1,$SVE_IN23_0,${SVE_R1}[2]
-	umullb	$SVE_ACC0,$SVE_IN23_0,${SVE_R0}[2]
+	umullb	$SVE_ACC4,$SVE_INhi_0,${SVE_R4}[2]
+	umullb	$SVE_ACC3,$SVE_INhi_0,${SVE_R3}[2]
+	umullb	$SVE_ACC2,$SVE_INhi_0,${SVE_R2}[2]
+	umullb	$SVE_ACC1,$SVE_INhi_0,${SVE_R1}[2]
+	umullb	$SVE_ACC0,$SVE_INhi_0,${SVE_R0}[2]
 
-	umlalb	$SVE_ACC4,$SVE_IN23_1,${SVE_R3}[2]
-	umlalb	$SVE_ACC3,$SVE_IN23_1,${SVE_R2}[2]
-	umlalb	$SVE_ACC2,$SVE_IN23_1,${SVE_R1}[2]
-	umlalb	$SVE_ACC1,$SVE_IN23_1,${SVE_R0}[2]
-	umlalb	$SVE_ACC0,$SVE_IN23_1,${SVE_S4}[2]
+	umlalb	$SVE_ACC4,$SVE_INhi_1,${SVE_R3}[2]
+	umlalb	$SVE_ACC3,$SVE_INhi_1,${SVE_R2}[2]
+	umlalb	$SVE_ACC2,$SVE_INhi_1,${SVE_R1}[2]
+	umlalb	$SVE_ACC1,$SVE_INhi_1,${SVE_R0}[2]
+	umlalb	$SVE_ACC0,$SVE_INhi_1,${SVE_S4}[2]
 
-	umlalb	$SVE_ACC4,$SVE_IN23_2,${SVE_R2}[2]
-	umlalb	$SVE_ACC3,$SVE_IN23_2,${SVE_R1}[2]
-	umlalb	$SVE_ACC2,$SVE_IN23_2,${SVE_R0}[2]
-	umlalb	$SVE_ACC1,$SVE_IN23_2,${SVE_S4}[2]
-	umlalb	$SVE_ACC0,$SVE_IN23_2,${SVE_S3}[2]
+	umlalb	$SVE_ACC4,$SVE_INhi_2,${SVE_R2}[2]
+	umlalb	$SVE_ACC3,$SVE_INhi_2,${SVE_R1}[2]
+	umlalb	$SVE_ACC2,$SVE_INhi_2,${SVE_R0}[2]
+	umlalb	$SVE_ACC1,$SVE_INhi_2,${SVE_S4}[2]
+	umlalb	$SVE_ACC0,$SVE_INhi_2,${SVE_S3}[2]
 
-	umlalb	$SVE_ACC4,$SVE_IN23_3,${SVE_R1}[2]
-	umlalb	$SVE_ACC3,$SVE_IN23_3,${SVE_R0}[2]
-	umlalb	$SVE_ACC2,$SVE_IN23_3,${SVE_S4}[2]
-	umlalb	$SVE_ACC1,$SVE_IN23_3,${SVE_S3}[2]
-	umlalb	$SVE_ACC0,$SVE_IN23_3,${SVE_S2}[2]
+	umlalb	$SVE_ACC4,$SVE_INhi_3,${SVE_R1}[2]
+	umlalb	$SVE_ACC3,$SVE_INhi_3,${SVE_R0}[2]
+	umlalb	$SVE_ACC2,$SVE_INhi_3,${SVE_S4}[2]
+	umlalb	$SVE_ACC1,$SVE_INhi_3,${SVE_S3}[2]
+	umlalb	$SVE_ACC0,$SVE_INhi_3,${SVE_S2}[2]
 
-	add 	$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
-	umlalb	$SVE_ACC4,$SVE_IN23_4,${SVE_R0}[2]
-	umlalb	$SVE_ACC3,$SVE_IN23_4,${SVE_S4}[2]
-	umlalb	$SVE_ACC2,$SVE_IN23_4,${SVE_S3}[2]
-	umlalb	$SVE_ACC1,$SVE_IN23_4,${SVE_S2}[2]
-	umlalb	$SVE_ACC0,$SVE_IN23_4,${SVE_S1}[2]
+	add 	$SVE_INlo_0,$SVE_INlo_0,$SVE_H0
+	umlalb	$SVE_ACC4,$SVE_INhi_4,${SVE_R0}[2]
+	umlalb	$SVE_ACC3,$SVE_INhi_4,${SVE_S4}[2]
+	umlalb	$SVE_ACC2,$SVE_INhi_4,${SVE_S3}[2]
+	umlalb	$SVE_ACC1,$SVE_INhi_4,${SVE_S2}[2]
+	umlalb	$SVE_ACC0,$SVE_INhi_4,${SVE_S1}[2]
 
 	////////////////////////////////////////////////////////////////
 	// (hash+inp[0:1])*r^4 and accumulate
 
-	add 	$SVE_IN01_1,$SVE_IN01_1,$SVE_H1
-	umlalb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[0]
-	umlalb	$SVE_ACC4,$SVE_IN01_0,${SVE_R4}[0]
-	umlalb	$SVE_ACC2,$SVE_IN01_0,${SVE_R2}[0]
-	umlalb	$SVE_ACC0,$SVE_IN01_0,${SVE_R0}[0]
-	umlalb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[0]
+	add 	$SVE_INlo_1,$SVE_INlo_1,$SVE_H1
+	umlalb	$SVE_ACC3,$SVE_INlo_0,${SVE_R3}[0]
+	umlalb	$SVE_ACC4,$SVE_INlo_0,${SVE_R4}[0]
+	umlalb	$SVE_ACC2,$SVE_INlo_0,${SVE_R2}[0]
+	umlalb	$SVE_ACC0,$SVE_INlo_0,${SVE_R0}[0]
+	umlalb	$SVE_ACC1,$SVE_INlo_0,${SVE_R1}[0]
 
-	add 	$SVE_IN01_2,$SVE_IN01_2,$SVE_H2
-	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[0]
-	umlalb	$SVE_ACC4,$SVE_IN01_1,${SVE_R3}[0]
-	umlalb	$SVE_ACC0,$SVE_IN01_1,${SVE_S4}[0]
-	umlalb	$SVE_ACC2,$SVE_IN01_1,${SVE_R1}[0]
-	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[0]
+	add 	$SVE_INlo_2,$SVE_INlo_2,$SVE_H2
+	umlalb	$SVE_ACC3,$SVE_INlo_1,${SVE_R2}[0]
+	umlalb	$SVE_ACC4,$SVE_INlo_1,${SVE_R3}[0]
+	umlalb	$SVE_ACC0,$SVE_INlo_1,${SVE_S4}[0]
+	umlalb	$SVE_ACC2,$SVE_INlo_1,${SVE_R1}[0]
+	umlalb	$SVE_ACC1,$SVE_INlo_1,${SVE_R0}[0]
 
-	add 	$SVE_IN01_3,$SVE_IN01_3,$SVE_H3
-	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[0]
-	umlalb	$SVE_ACC0,$SVE_IN01_2,${SVE_S3}[0]
-	umlalb	$SVE_ACC4,$SVE_IN01_2,${SVE_R2}[0]
-	umlalb	$SVE_ACC1,$SVE_IN01_2,${SVE_S4}[0]
-	umlalb	$SVE_ACC2,$SVE_IN01_2,${SVE_R0}[0]
+	add 	$SVE_INlo_3,$SVE_INlo_3,$SVE_H3
+	umlalb	$SVE_ACC3,$SVE_INlo_2,${SVE_R1}[0]
+	umlalb	$SVE_ACC0,$SVE_INlo_2,${SVE_S3}[0]
+	umlalb	$SVE_ACC4,$SVE_INlo_2,${SVE_R2}[0]
+	umlalb	$SVE_ACC1,$SVE_INlo_2,${SVE_S4}[0]
+	umlalb	$SVE_ACC2,$SVE_INlo_2,${SVE_R0}[0]
 
-	add 	$SVE_IN01_4,$SVE_IN01_4,$SVE_H4
-	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[0]
-	umlalb	$SVE_ACC0,$SVE_IN01_3,${SVE_S2}[0]
-	umlalb	$SVE_ACC4,$SVE_IN01_3,${SVE_R1}[0]
-	umlalb	$SVE_ACC1,$SVE_IN01_3,${SVE_S3}[0]
-	umlalb	$SVE_ACC2,$SVE_IN01_3,${SVE_S4}[0]
+	add 	$SVE_INlo_4,$SVE_INlo_4,$SVE_H4
+	umlalb	$SVE_ACC3,$SVE_INlo_3,${SVE_R0}[0]
+	umlalb	$SVE_ACC0,$SVE_INlo_3,${SVE_S2}[0]
+	umlalb	$SVE_ACC4,$SVE_INlo_3,${SVE_R1}[0]
+	umlalb	$SVE_ACC1,$SVE_INlo_3,${SVE_S3}[0]
+	umlalb	$SVE_ACC2,$SVE_INlo_3,${SVE_S4}[0]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_4,${SVE_S4}[0]
-	umlalb	$SVE_ACC0,$SVE_IN01_4,${SVE_S1}[0]
-	umlalb	$SVE_ACC4,$SVE_IN01_4,${SVE_R0}[0]
-	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[0]
-	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[0]
+	umlalb	$SVE_ACC3,$SVE_INlo_4,${SVE_S4}[0]
+	umlalb	$SVE_ACC0,$SVE_INlo_4,${SVE_S1}[0]
+	umlalb	$SVE_ACC4,$SVE_INlo_4,${SVE_R0}[0]
+	umlalb	$SVE_ACC1,$SVE_INlo_4,${SVE_S2}[0]
+	umlalb	$SVE_ACC2,$SVE_INlo_4,${SVE_S3}[0]
 
 	// Load and convert new input batch
 	lsr		x15,$len,#4
 	whilelo	p1.s,xzr,x15
-	ld4w	{ z9.s-z12.s }, p1/z, [$inp]		// Loading all blocks at once
+	// It is probably more efficient to load into INhi since INlo are used just prior
+	ld4w	{ z14.s-z17.s }, p1/z, [$inp]		// Loading all blocks at once
 
 #ifdef  __AARCH64EB__
-	revb	z9.s,  p0/m, z9.s
-	revb	z10.s, p0/m, z10.s
-	revb	z11.s, p0/m, z11.s
-	revb	z12.s, p0/m, z12.s
+	revb	z14.s, p0/m, z14.s
+	revb	z15.s, p0/m, z15.s
+	revb	z16.s, p0/m, z16.s
+	revb	z17.s, p0/m, z17.s
 #endif
 
 	dup 	${SVE_MASK}.s,#-1
 	lsr 	${SVE_MASK}.s,${SVE_MASK}.s,#6
 
-	lsr		${SVE_T0}.s,z11.s,#14		// T0 -> z11 >> 14
-	lsr		z13.s,z12.s,#8				// z13 -> l4
-	lsl		z12.s,z12.s,#18				// z12 -> upper part of l3
-	orr		z12.d,z12.d,${SVE_T0}.d		// z12 -> final l3
-	lsl		z11.s,z11.s,#12				// z11 -> upper part of l2
-	lsr		${SVE_T1}.s,z10.s,#20		// T1 -> z10 >> 20
-	lsl		z10.s,z10.s,#6				// z10 -> upper part of l1
-	lsr		${SVE_T0}.s,z9.s,#26		// T0 -> z9 >> 26
-	and		z9.d,z9.d,${SVE_MASK}.d		// z0 is now final l0
-	orr		z11.d,z11.d,${SVE_T1}.d		// z11 -> final l2
-	orr		z10.d,z10.d,${SVE_T0}.d		// z10 -> final l1
+	lsr		${SVE_T0}.s,z16.s,#14		// T0 -> z16 >> 14
+	lsr		z18.s,z17.s,#8				// z18 -> l4
+	lsl		z17.s,z17.s,#18				// z17 -> upper part of l3
+	orr		z17.d,z17.d,${SVE_T0}.d		// z17 -> final l3
+	lsl		z16.s,z16.s,#12				// z16 -> upper part of l2
+	lsr		${SVE_T1}.s,z15.s,#20		// T1 -> z15 >> 20
+	lsl		z15.s,z15.s,#6				// z15 -> upper part of l1
+	lsr		${SVE_T0}.s,z14.s,#26		// T0 -> z14 >> 26
+	and		z14.d,z14.d,${SVE_MASK}.d	// z14 is now final l0
+	orr		z16.d,z16.d,${SVE_T1}.d		// z16 -> final l2
+	orr		z15.d,z15.d,${SVE_T0}.d		// z15 -> final l1
 
 	dup		${SVE_T1}.s,w3
 
-	orr		z13.d,z13.d,${SVE_T1}.d		// l4 += padbit
-	and		z12.d,z12.d,${SVE_MASK}.d	// Mask l3
-	and		z11.d,z11.d,${SVE_MASK}.d	// Mask l2
-	and		z10.d,z10.d,${SVE_MASK}.d	// Mask l1
+	orr		z18.d,z18.d,${SVE_T1}.d		// l4 += padbit
+	and		z17.d,z17.d,${SVE_MASK}.d	// Mask l3
+	and		z16.d,z16.d,${SVE_MASK}.d	// Mask l2
+	and		z15.d,z15.d,${SVE_MASK}.d	// Mask l1
 
 	// Now distribute interleaving blocks to two sets of vector registers
 	// I guess it is possible to interleave below with above somewhat
 	eor 	${SVE_T0}.d,${SVE_T0}.d,${SVE_T0}.d	// set zero mask
 
-	// Move high blocks from INlo -> INhi and sparcify (put in even lanes)
-	zip2	z14.s,z9.s,${SVE_T0}.s
-	zip2	z15.s,z10.s,${SVE_T0}.s
-	zip2	z16.s,z11.s,${SVE_T0}.s
-	zip2	z17.s,z12.s,${SVE_T0}.s
-	zip2	z18.s,z13.s,${SVE_T0}.s
+	// Move low blocks from INhi -> INlo and sparcify (put in even lanes)
+	zip1	z9.s,z14.s,${SVE_T0}.s
+	zip1	z10.s,z15.s,${SVE_T0}.s
+	zip1	z11.s,z16.s,${SVE_T0}.s
+	zip1	z12.s,z17.s,${SVE_T0}.s
+	zip1	z13.s,z18.s,${SVE_T0}.s
 
 	// Sparcify blocks to even lanes in INlo
-	zip1	z9.s,z9.s,${SVE_T0}.s
-	zip1	z10.s,z10.s,${SVE_T0}.s
-	zip1	z11.s,z11.s,${SVE_T0}.s
-	zip1	z12.s,z12.s,${SVE_T0}.s
-	zip1	z13.s,z13.s,${SVE_T0}.s
+	zip2	z14.s,z14.s,${SVE_T0}.s
+	zip2	z15.s,z15.s,${SVE_T0}.s
+	zip2	z16.s,z16.s,${SVE_T0}.s
+	zip2	z17.s,z17.s,${SVE_T0}.s
+	zip2	z18.s,z18.s,${SVE_T0}.s
 
 	subs	$len,$len,$vl,lsl #5
 
@@ -1634,41 +1635,41 @@ poly1305_blocks_sve2:
 
 	// Might want to re-arrange, accoring to the lazy reduction order
 	//  as well as interleave add and mul.
-	add 	$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
-	add 	$SVE_IN01_1,$SVE_IN01_1,$SVE_H1
-	add 	$SVE_IN01_2,$SVE_IN01_2,$SVE_H2
-	add 	$SVE_IN01_3,$SVE_IN01_3,$SVE_H3
-	add 	$SVE_IN01_4,$SVE_IN01_4,$SVE_H4
+	add 	$SVE_INlo_0,$SVE_INlo_0,$SVE_H0
+	add 	$SVE_INlo_1,$SVE_INlo_1,$SVE_H1
+	add 	$SVE_INlo_2,$SVE_INlo_2,$SVE_H2
+	add 	$SVE_INlo_3,$SVE_INlo_3,$SVE_H3
+	add 	$SVE_INlo_4,$SVE_INlo_4,$SVE_H4
 
-	umullb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[2]
-	umullb	$SVE_ACC4,$SVE_IN01_0,${SVE_R4}[2]
-	umullb	$SVE_ACC2,$SVE_IN01_0,${SVE_R2}[2]
-	umullb	$SVE_ACC0,$SVE_IN01_0,${SVE_R0}[2]
-	umullb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[2]
+	umullb	$SVE_ACC3,$SVE_INlo_0,${SVE_R3}[2]
+	umullb	$SVE_ACC4,$SVE_INlo_0,${SVE_R4}[2]
+	umullb	$SVE_ACC2,$SVE_INlo_0,${SVE_R2}[2]
+	umullb	$SVE_ACC0,$SVE_INlo_0,${SVE_R0}[2]
+	umullb	$SVE_ACC1,$SVE_INlo_0,${SVE_R1}[2]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[2]
-	umlalb	$SVE_ACC4,$SVE_IN01_1,${SVE_R3}[2]
-	umlalb	$SVE_ACC0,$SVE_IN01_1,${SVE_S4}[2]
-	umlalb	$SVE_ACC2,$SVE_IN01_1,${SVE_R1}[2]
-	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[2]
+	umlalb	$SVE_ACC3,$SVE_INlo_1,${SVE_R2}[2]
+	umlalb	$SVE_ACC4,$SVE_INlo_1,${SVE_R3}[2]
+	umlalb	$SVE_ACC0,$SVE_INlo_1,${SVE_S4}[2]
+	umlalb	$SVE_ACC2,$SVE_INlo_1,${SVE_R1}[2]
+	umlalb	$SVE_ACC1,$SVE_INlo_1,${SVE_R0}[2]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[2]
-	umlalb	$SVE_ACC0,$SVE_IN01_2,${SVE_S3}[2]
-	umlalb	$SVE_ACC4,$SVE_IN01_2,${SVE_R2}[2]
-	umlalb	$SVE_ACC1,$SVE_IN01_2,${SVE_S4}[2]
-	umlalb	$SVE_ACC2,$SVE_IN01_2,${SVE_R0}[2]
+	umlalb	$SVE_ACC3,$SVE_INlo_2,${SVE_R1}[2]
+	umlalb	$SVE_ACC0,$SVE_INlo_2,${SVE_S3}[2]
+	umlalb	$SVE_ACC4,$SVE_INlo_2,${SVE_R2}[2]
+	umlalb	$SVE_ACC1,$SVE_INlo_2,${SVE_S4}[2]
+	umlalb	$SVE_ACC2,$SVE_INlo_2,${SVE_R0}[2]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[2]
-	umlalb	$SVE_ACC0,$SVE_IN01_3,${SVE_S2}[2]
-	umlalb	$SVE_ACC4,$SVE_IN01_3,${SVE_R1}[2]
-	umlalb	$SVE_ACC1,$SVE_IN01_3,${SVE_S3}[2]
-	umlalb	$SVE_ACC2,$SVE_IN01_3,${SVE_S4}[2]
+	umlalb	$SVE_ACC3,$SVE_INlo_3,${SVE_R0}[2]
+	umlalb	$SVE_ACC0,$SVE_INlo_3,${SVE_S2}[2]
+	umlalb	$SVE_ACC4,$SVE_INlo_3,${SVE_R1}[2]
+	umlalb	$SVE_ACC1,$SVE_INlo_3,${SVE_S3}[2]
+	umlalb	$SVE_ACC2,$SVE_INlo_3,${SVE_S4}[2]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_4,${SVE_S4}[2]
-	umlalb	$SVE_ACC0,$SVE_IN01_4,${SVE_S1}[2]
-	umlalb	$SVE_ACC4,$SVE_IN01_4,${SVE_R0}[2]
-	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[2]
-	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[2]
+	umlalb	$SVE_ACC3,$SVE_INlo_4,${SVE_S4}[2]
+	umlalb	$SVE_ACC0,$SVE_INlo_4,${SVE_S1}[2]
+	umlalb	$SVE_ACC4,$SVE_INlo_4,${SVE_R0}[2]
+	umlalb	$SVE_ACC1,$SVE_INlo_4,${SVE_S2}[2]
+	umlalb	$SVE_ACC2,$SVE_INlo_4,${SVE_S3}[2]
 
 	// Lazy reduction
 	bl		poly1305_lazy_reduce_sve2
@@ -1729,41 +1730,41 @@ poly1305_blocks_sve2:
 	adr     $SVE_S3,[$SVE_R3,$SVE_R3,lsl #2]
 	adr     $SVE_S4,[$SVE_R4,$SVE_R4,lsl #2]
 
-	add 	$SVE_IN01_0,$SVE_IN01_0,$SVE_H0
-	add 	$SVE_IN01_1,$SVE_IN01_1,$SVE_H1
-	add 	$SVE_IN01_2,$SVE_IN01_2,$SVE_H2
-	add 	$SVE_IN01_3,$SVE_IN01_3,$SVE_H3
-	add 	$SVE_IN01_4,$SVE_IN01_4,$SVE_H4
+	add 	$SVE_INlo_0,$SVE_INlo_0,$SVE_H0
+	add 	$SVE_INlo_1,$SVE_INlo_1,$SVE_H1
+	add 	$SVE_INlo_2,$SVE_INlo_2,$SVE_H2
+	add 	$SVE_INlo_3,$SVE_INlo_3,$SVE_H3
+	add 	$SVE_INlo_4,$SVE_INlo_4,$SVE_H4
 
-	umullb	$SVE_ACC3,$SVE_IN01_0,${SVE_R3}[0]
-	umullb	$SVE_ACC4,$SVE_IN01_0,${SVE_R4}[0]
-	umullb	$SVE_ACC2,$SVE_IN01_0,${SVE_R2}[0]
-	umullb	$SVE_ACC0,$SVE_IN01_0,${SVE_R0}[0]
-	umullb	$SVE_ACC1,$SVE_IN01_0,${SVE_R1}[0]
+	umullb	$SVE_ACC3,$SVE_INlo_0,${SVE_R3}[0]
+	umullb	$SVE_ACC4,$SVE_INlo_0,${SVE_R4}[0]
+	umullb	$SVE_ACC2,$SVE_INlo_0,${SVE_R2}[0]
+	umullb	$SVE_ACC0,$SVE_INlo_0,${SVE_R0}[0]
+	umullb	$SVE_ACC1,$SVE_INlo_0,${SVE_R1}[0]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_1,${SVE_R2}[0]
-	umlalb	$SVE_ACC4,$SVE_IN01_1,${SVE_R3}[0]
-	umlalb	$SVE_ACC0,$SVE_IN01_1,${SVE_S4}[0]
-	umlalb	$SVE_ACC2,$SVE_IN01_1,${SVE_R1}[0]
-	umlalb	$SVE_ACC1,$SVE_IN01_1,${SVE_R0}[0]
+	umlalb	$SVE_ACC3,$SVE_INlo_1,${SVE_R2}[0]
+	umlalb	$SVE_ACC4,$SVE_INlo_1,${SVE_R3}[0]
+	umlalb	$SVE_ACC0,$SVE_INlo_1,${SVE_S4}[0]
+	umlalb	$SVE_ACC2,$SVE_INlo_1,${SVE_R1}[0]
+	umlalb	$SVE_ACC1,$SVE_INlo_1,${SVE_R0}[0]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_2,${SVE_R1}[0]
-	umlalb	$SVE_ACC0,$SVE_IN01_2,${SVE_S3}[0]
-	umlalb	$SVE_ACC4,$SVE_IN01_2,${SVE_R2}[0]
-	umlalb	$SVE_ACC1,$SVE_IN01_2,${SVE_S4}[0]
-	umlalb	$SVE_ACC2,$SVE_IN01_2,${SVE_R0}[0]
+	umlalb	$SVE_ACC3,$SVE_INlo_2,${SVE_R1}[0]
+	umlalb	$SVE_ACC0,$SVE_INlo_2,${SVE_S3}[0]
+	umlalb	$SVE_ACC4,$SVE_INlo_2,${SVE_R2}[0]
+	umlalb	$SVE_ACC1,$SVE_INlo_2,${SVE_S4}[0]
+	umlalb	$SVE_ACC2,$SVE_INlo_2,${SVE_R0}[0]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_3,${SVE_R0}[0]
-	umlalb	$SVE_ACC0,$SVE_IN01_3,${SVE_S2}[0]
-	umlalb	$SVE_ACC4,$SVE_IN01_3,${SVE_R1}[0]
-	umlalb	$SVE_ACC1,$SVE_IN01_3,${SVE_S3}[0]
-	umlalb	$SVE_ACC2,$SVE_IN01_3,${SVE_S4}[0]
+	umlalb	$SVE_ACC3,$SVE_INlo_3,${SVE_R0}[0]
+	umlalb	$SVE_ACC0,$SVE_INlo_3,${SVE_S2}[0]
+	umlalb	$SVE_ACC4,$SVE_INlo_3,${SVE_R1}[0]
+	umlalb	$SVE_ACC1,$SVE_INlo_3,${SVE_S3}[0]
+	umlalb	$SVE_ACC2,$SVE_INlo_3,${SVE_S4}[0]
 
-	umlalb	$SVE_ACC3,$SVE_IN01_4,${SVE_S4}[0]
-	umlalb	$SVE_ACC0,$SVE_IN01_4,${SVE_S1}[0]
-	umlalb	$SVE_ACC4,$SVE_IN01_4,${SVE_R0}[0]
-	umlalb	$SVE_ACC1,$SVE_IN01_4,${SVE_S2}[0]
-	umlalb	$SVE_ACC2,$SVE_IN01_4,${SVE_S3}[0]
+	umlalb	$SVE_ACC3,$SVE_INlo_4,${SVE_S4}[0]
+	umlalb	$SVE_ACC0,$SVE_INlo_4,${SVE_S1}[0]
+	umlalb	$SVE_ACC4,$SVE_INlo_4,${SVE_R0}[0]
+	umlalb	$SVE_ACC1,$SVE_INlo_4,${SVE_S2}[0]
+	umlalb	$SVE_ACC2,$SVE_INlo_4,${SVE_S3}[0]
 
 	// Lazy reduction
 	bl		poly1305_lazy_reduce_sve2
@@ -1774,11 +1775,11 @@ poly1305_blocks_sve2:
 	//  start from vl (refer to as w16) and not vl/2
 	// Higher part now contains "junk"
 	index	${SVE_T0}.s,w16,#1
-	tbl		${SVE_IN01_0},${SVE_IN01_0},${SVE_T0}.s
-	tbl		${SVE_IN01_1},${SVE_IN01_1},${SVE_T0}.s
-	tbl		${SVE_IN01_2},${SVE_IN01_2},${SVE_T0}.s
-	tbl		${SVE_IN01_3},${SVE_IN01_3},${SVE_T0}.s
-	tbl		${SVE_IN01_4},${SVE_IN01_4},${SVE_T0}.s
+	tbl		${SVE_INlo_0},${SVE_INlo_0},${SVE_T0}.s
+	tbl		${SVE_INlo_1},${SVE_INlo_1},${SVE_T0}.s
+	tbl		${SVE_INlo_2},${SVE_INlo_2},${SVE_T0}.s
+	tbl		${SVE_INlo_3},${SVE_INlo_3},${SVE_T0}.s
+	tbl		${SVE_INlo_4},${SVE_INlo_4},${SVE_T0}.s
 	lsr		$vl,$vl,#1		// vl /= 2
 	cmp 	$vl,#2
 	b.hi	.Loop_reduce_sve2
@@ -1792,11 +1793,11 @@ poly1305_blocks_sve2:
 	////////////////////////////////////////////////////////////////
 
 	//Last hash addition - now everything stored in SVE_Hx
-	add 	$SVE_H0,$SVE_H0,$SVE_IN01_0
-	add 	$SVE_H1,$SVE_H1,$SVE_IN01_1
-	add 	$SVE_H2,$SVE_H2,$SVE_IN01_2
-	add 	$SVE_H3,$SVE_H3,$SVE_IN01_3
-	add 	$SVE_H4,$SVE_H4,$SVE_IN01_4
+	add 	$SVE_H0,$SVE_H0,$SVE_INlo_0
+	add 	$SVE_H1,$SVE_H1,$SVE_INlo_1
+	add 	$SVE_H2,$SVE_H2,$SVE_INlo_2
+	add 	$SVE_H3,$SVE_H3,$SVE_INlo_3
+	add 	$SVE_H4,$SVE_H4,$SVE_INlo_4
 
 	// Shift even lanes to odd lanes and set even to zero
 	//  because r^2 and r^1 are in lanes 1 and 3 of R-vectors
