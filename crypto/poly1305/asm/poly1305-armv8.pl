@@ -1425,40 +1425,36 @@ poly1305_blocks_sve2:
 
 	lsr		${SVE_T0}.s,z11.s,#14		// T0 -> z11 >> 14
 	lsr		z13.s,z12.s,#8				// z13 -> l4
-	lsl		z12.s,z12.s,#18				// z12 -> upper part of l3
-	orr		z12.d,z12.d,${SVE_T0}.d		// z12 -> final l3
 	lsl		z11.s,z11.s,#12				// z11 -> upper part of l2
+	lsl		z12.s,z12.s,#18				// z12 -> upper part of l3
 	lsr		${SVE_T1}.s,z10.s,#20		// T1 -> z10 >> 20
+	orr		z12.d,z12.d,${SVE_T0}.d		// z12 -> final l3
 	lsl		z10.s,z10.s,#6				// z10 -> upper part of l1
 	lsr		${SVE_T0}.s,z9.s,#26		// T0 -> z9 >> 26
 	and		z9.d,z9.d,${SVE_MASK}.d		// z9 is now final l0
 	orr		z11.d,z11.d,${SVE_T1}.d		// z11 -> final l2
 	orr		z10.d,z10.d,${SVE_T0}.d		// z10 -> final l1
-
 	dup		${SVE_T1}.s,w3				// x3 -> $padbit but need it as a word
-
+	eor 	${SVE_T0}.d,${SVE_T0}.d,${SVE_T0}.d	// set zero mask
 	orr		z13.d,z13.d,${SVE_T1}.d		// l4 += padbit
 	and		z12.d,z12.d,${SVE_MASK}.d	// Mask l3
 	and		z11.d,z11.d,${SVE_MASK}.d	// Mask l2
 	and		z10.d,z10.d,${SVE_MASK}.d	// Mask l1
 
-	// Now distribute interleaving blocks to two sets of vector registers
-	// I guess it is possible to interleave below with above somewhat
-	eor 	${SVE_T0}.d,${SVE_T0}.d,${SVE_T0}.d	// set zero mask
 
 	// Move high blocks from INlo -> INhi and sparcify (put in even lanes)
 	zip2	z14.s,z9.s,${SVE_T0}.s
-	zip2	z15.s,z10.s,${SVE_T0}.s
-	zip2	z16.s,z11.s,${SVE_T0}.s
-	zip2	z17.s,z12.s,${SVE_T0}.s
 	zip2	z18.s,z13.s,${SVE_T0}.s
+	zip2	z17.s,z12.s,${SVE_T0}.s
+	zip2	z16.s,z11.s,${SVE_T0}.s
+	zip2	z15.s,z10.s,${SVE_T0}.s
 
 	// Sparcify blocks to even lanes in INlo
 	zip1	z9.s,z9.s,${SVE_T0}.s
-	zip1	z10.s,z10.s,${SVE_T0}.s
-	zip1	z11.s,z11.s,${SVE_T0}.s
-	zip1	z12.s,z12.s,${SVE_T0}.s
 	zip1	z13.s,z13.s,${SVE_T0}.s
+	zip1	z12.s,z12.s,${SVE_T0}.s
+	zip1	z11.s,z11.s,${SVE_T0}.s
+	zip1	z10.s,z10.s,${SVE_T0}.s
 
 	subs	$len,$len,$vl,lsl #5		// By half vector width * 32
 
@@ -1522,48 +1518,19 @@ poly1305_blocks_sve2:
 	umlalb	$SVE_ACC1,$SVE_INhi_4,${SVE_S2}[2]
 	umlalb	$SVE_ACC0,$SVE_INhi_4,${SVE_S1}[2]
 
-	////////////////////////////////////////////////////////////////
-	// (hash+inp[0:1])*r^4 and accumulate
+	//////////////////////////////////////////////////////////////////////
+	// (hash+inp[0:vl])*r^{vl*2} and accumulate
+	// Interleave add+mul with loading and converting the next input batch
 
 	add 	$SVE_INlo_0,$SVE_INlo_0,$SVE_H0
+	 lsr	x15,$len,#4
 	umlalb	$SVE_ACC3,$SVE_INlo_2,${SVE_R1}[0]
+	 whilelo	p1.s,xzr,x15
 	umlalb	$SVE_ACC0,$SVE_INlo_2,${SVE_S3}[0]
+	 ld4w	{ z14.s-z17.s }, p1/z, [$inp]
 	umlalb	$SVE_ACC4,$SVE_INlo_2,${SVE_R2}[0]
 	umlalb	$SVE_ACC1,$SVE_INlo_2,${SVE_S4}[0]
 	umlalb	$SVE_ACC2,$SVE_INlo_2,${SVE_R0}[0]
-
-	add 	$SVE_INlo_1,$SVE_INlo_1,$SVE_H1
-	umlalb	$SVE_ACC3,$SVE_INlo_0,${SVE_R3}[0]
-	umlalb	$SVE_ACC4,$SVE_INlo_0,${SVE_R4}[0]
-	umlalb	$SVE_ACC2,$SVE_INlo_0,${SVE_R2}[0]
-	umlalb	$SVE_ACC0,$SVE_INlo_0,${SVE_R0}[0]
-	umlalb	$SVE_ACC1,$SVE_INlo_0,${SVE_R1}[0]
-
-	add 	$SVE_INlo_3,$SVE_INlo_3,$SVE_H3
-	umlalb	$SVE_ACC3,$SVE_INlo_1,${SVE_R2}[0]
-	umlalb	$SVE_ACC4,$SVE_INlo_1,${SVE_R3}[0]
-	umlalb	$SVE_ACC0,$SVE_INlo_1,${SVE_S4}[0]
-	umlalb	$SVE_ACC2,$SVE_INlo_1,${SVE_R1}[0]
-	umlalb	$SVE_ACC1,$SVE_INlo_1,${SVE_R0}[0]
-
-	add 	$SVE_INlo_4,$SVE_INlo_4,$SVE_H4
-	umlalb	$SVE_ACC3,$SVE_INlo_3,${SVE_R0}[0]
-	umlalb	$SVE_ACC0,$SVE_INlo_3,${SVE_S2}[0]
-	umlalb	$SVE_ACC4,$SVE_INlo_3,${SVE_R1}[0]
-	umlalb	$SVE_ACC1,$SVE_INlo_3,${SVE_S3}[0]
-	umlalb	$SVE_ACC2,$SVE_INlo_3,${SVE_S4}[0]
-
-	umlalb	$SVE_ACC3,$SVE_INlo_4,${SVE_S4}[0]
-	umlalb	$SVE_ACC0,$SVE_INlo_4,${SVE_S1}[0]
-	umlalb	$SVE_ACC4,$SVE_INlo_4,${SVE_R0}[0]
-	umlalb	$SVE_ACC1,$SVE_INlo_4,${SVE_S2}[0]
-	umlalb	$SVE_ACC2,$SVE_INlo_4,${SVE_S3}[0]
-
-	// Load and convert new input batch
-	lsr		x15,$len,#4
-	whilelo	p1.s,xzr,x15
-	// It is probably more efficient to load into INhi since INlo are used just prior
-	ld4w	{ z14.s-z17.s }, p1/z, [$inp]		// Loading all blocks at once
 
 #ifdef  __AARCH64EB__
 	revb	z14.s, p0/m, z14.s
@@ -1572,38 +1539,56 @@ poly1305_blocks_sve2:
 	revb	z17.s, p0/m, z17.s
 #endif
 
-	dup 	${SVE_MASK}.s,#-1
-	lsr 	${SVE_MASK}.s,${SVE_MASK}.s,#6
+	add 	$SVE_INlo_1,$SVE_INlo_1,$SVE_H1
+	 dup 	${SVE_MASK}.s,#-1
+	umlalb	$SVE_ACC3,$SVE_INlo_0,${SVE_R3}[0]
+	 lsr 	${SVE_MASK}.s,${SVE_MASK}.s,#6
+	umlalb	$SVE_ACC4,$SVE_INlo_0,${SVE_R4}[0]
+	 lsr	${SVE_T0}.s,z16.s,#14		// T0 -> z16 >> 14
+	umlalb	$SVE_ACC2,$SVE_INlo_0,${SVE_R2}[0]
+	 lsr	z18.s,z17.s,#8				// z18 -> l4
+	umlalb	$SVE_ACC0,$SVE_INlo_0,${SVE_R0}[0]
+	 lsl	z16.s,z16.s,#12				// z16 -> upper part of l2
+	umlalb	$SVE_ACC1,$SVE_INlo_0,${SVE_R1}[0]
+	 lsl	z17.s,z17.s,#18				// z17 -> upper part of l3
 
-	lsr		${SVE_T0}.s,z16.s,#14		// T0 -> z16 >> 14
-	lsr		z18.s,z17.s,#8				// z18 -> l4
-	lsl		z17.s,z17.s,#18				// z17 -> upper part of l3
-	orr		z17.d,z17.d,${SVE_T0}.d		// z17 -> final l3
-	lsl		z16.s,z16.s,#12				// z16 -> upper part of l2
-	lsr		${SVE_T1}.s,z15.s,#20		// T1 -> z15 >> 20
-	lsl		z15.s,z15.s,#6				// z15 -> upper part of l1
-	lsr		${SVE_T0}.s,z14.s,#26		// T0 -> z14 >> 26
-	and		z14.d,z14.d,${SVE_MASK}.d	// z14 is now final l0
-	orr		z16.d,z16.d,${SVE_T1}.d		// z16 -> final l2
-	orr		z15.d,z15.d,${SVE_T0}.d		// z15 -> final l1
+	add 	$SVE_INlo_3,$SVE_INlo_3,$SVE_H3
+	 lsr	${SVE_T1}.s,z15.s,#20		// T1 -> z15 >> 20
+	umlalb	$SVE_ACC3,$SVE_INlo_1,${SVE_R2}[0]
+	 orr	z17.d,z17.d,${SVE_T0}.d		// z17 -> final l3
+	umlalb	$SVE_ACC4,$SVE_INlo_1,${SVE_R3}[0]
+	 lsl	z15.s,z15.s,#6				// z15 -> upper part of l1
+	umlalb	$SVE_ACC0,$SVE_INlo_1,${SVE_S4}[0]
+	 lsr	${SVE_T0}.s,z14.s,#26		// T0 -> z14 >> 26
+	umlalb	$SVE_ACC2,$SVE_INlo_1,${SVE_R1}[0]
+	 and	z14.d,z14.d,${SVE_MASK}.d	// z14 is now final l0
+	umlalb	$SVE_ACC1,$SVE_INlo_1,${SVE_R0}[0]
+	 orr	z16.d,z16.d,${SVE_T1}.d		// z16 -> final l2
 
-	dup		${SVE_T1}.s,w3
+	add 	$SVE_INlo_4,$SVE_INlo_4,$SVE_H4
+	 orr	z15.d,z15.d,${SVE_T0}.d		// z15 -> final l1
+	umlalb	$SVE_ACC3,$SVE_INlo_3,${SVE_R0}[0]
+	 dup	${SVE_T1}.s,w3
+	umlalb	$SVE_ACC0,$SVE_INlo_3,${SVE_S2}[0]
+	 eor 	${SVE_T0}.d,${SVE_T0}.d,${SVE_T0}.d	// set zero mask
+	umlalb	$SVE_ACC4,$SVE_INlo_3,${SVE_R1}[0]
+	 orr	z18.d,z18.d,${SVE_T1}.d		// l4 += padbit
+	umlalb	$SVE_ACC1,$SVE_INlo_3,${SVE_S3}[0]
+	 and	z17.d,z17.d,${SVE_MASK}.d	// Mask l3
+	umlalb	$SVE_ACC2,$SVE_INlo_3,${SVE_S4}[0]
+	 and	z16.d,z16.d,${SVE_MASK}.d	// Mask l2
 
-	orr		z18.d,z18.d,${SVE_T1}.d		// l4 += padbit
-	and		z17.d,z17.d,${SVE_MASK}.d	// Mask l3
-	and		z16.d,z16.d,${SVE_MASK}.d	// Mask l2
-	and		z15.d,z15.d,${SVE_MASK}.d	// Mask l1
-
-	// Now distribute interleaving blocks to two sets of vector registers
-	// I guess it is possible to interleave below with above somewhat
-	eor 	${SVE_T0}.d,${SVE_T0}.d,${SVE_T0}.d	// set zero mask
-
-	// Move low blocks from INhi -> INlo and sparcify (put in even lanes)
-	zip1	z9.s,z14.s,${SVE_T0}.s
-	zip1	z10.s,z15.s,${SVE_T0}.s
-	zip1	z11.s,z16.s,${SVE_T0}.s
-	zip1	z12.s,z17.s,${SVE_T0}.s
-	zip1	z13.s,z18.s,${SVE_T0}.s
+	umlalb	$SVE_ACC3,$SVE_INlo_4,${SVE_S4}[0]
+	 and	z15.d,z15.d,${SVE_MASK}.d	// Mask l1
+	umlalb	$SVE_ACC0,$SVE_INlo_4,${SVE_S1}[0]
+	 zip1	z9.s,z14.s,${SVE_T0}.s
+	umlalb	$SVE_ACC4,$SVE_INlo_4,${SVE_R0}[0]
+	 zip1	z10.s,z15.s,${SVE_T0}.s
+	umlalb	$SVE_ACC1,$SVE_INlo_4,${SVE_S2}[0]
+	 zip1	z11.s,z16.s,${SVE_T0}.s
+	umlalb	$SVE_ACC2,$SVE_INlo_4,${SVE_S3}[0]
+	 zip1	z12.s,z17.s,${SVE_T0}.s
+	 zip1	z13.s,z18.s,${SVE_T0}.s
 
 	// Sparcify blocks to even lanes in INlo
 	zip2	z14.s,z14.s,${SVE_T0}.s
