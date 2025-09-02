@@ -1617,9 +1617,8 @@ poly1305_blocks_sve2:
 	//  first part of long tail                                   //
 	////////////////////////////////////////////////////////////////
 	//NB `vl` here (and in the code) is the vector length in double words.
+	// Intereaving algebra with copying INhi -> INlo for the next steps.
 
-	// Might want to re-arrange, accoring to the lazy reduction order
-	//  as well as interleave add and mul.
 	add 	$SVE_INlo_2,$SVE_INlo_2,$SVE_H2
 	add 	$SVE_INlo_0,$SVE_INlo_0,$SVE_H0
 	add 	$SVE_INlo_1,$SVE_INlo_1,$SVE_H1
@@ -1637,35 +1636,33 @@ poly1305_blocks_sve2:
 	umlalb	$SVE_ACC2,$SVE_INlo_0,${SVE_R2}[2]
 	umlalb	$SVE_ACC0,$SVE_INlo_0,${SVE_R0}[2]
 	umlalb	$SVE_ACC1,$SVE_INlo_0,${SVE_R1}[2]
+	mov		z11.d,z16.d
 
 	umlalb	$SVE_ACC3,$SVE_INlo_1,${SVE_R2}[2]
 	umlalb	$SVE_ACC4,$SVE_INlo_1,${SVE_R3}[2]
 	umlalb	$SVE_ACC0,$SVE_INlo_1,${SVE_S4}[2]
 	umlalb	$SVE_ACC2,$SVE_INlo_1,${SVE_R1}[2]
 	umlalb	$SVE_ACC1,$SVE_INlo_1,${SVE_R0}[2]
+	mov		z9.d,z14.d	
 
 	umlalb	$SVE_ACC3,$SVE_INlo_3,${SVE_R0}[2]
 	umlalb	$SVE_ACC0,$SVE_INlo_3,${SVE_S2}[2]
 	umlalb	$SVE_ACC4,$SVE_INlo_3,${SVE_R1}[2]
 	umlalb	$SVE_ACC1,$SVE_INlo_3,${SVE_S3}[2]
 	umlalb	$SVE_ACC2,$SVE_INlo_3,${SVE_S4}[2]
+	mov		z10.d,z15.d
 
 	umlalb	$SVE_ACC3,$SVE_INlo_4,${SVE_S4}[2]
 	umlalb	$SVE_ACC0,$SVE_INlo_4,${SVE_S1}[2]
 	umlalb	$SVE_ACC4,$SVE_INlo_4,${SVE_R0}[2]
 	umlalb	$SVE_ACC1,$SVE_INlo_4,${SVE_S2}[2]
 	umlalb	$SVE_ACC2,$SVE_INlo_4,${SVE_S3}[2]
+	mov		z12.d,z17.d
 
 	// Lazy reduction
 	bl		poly1305_lazy_reduce_sve2
 	ldr	x30,[sp,#8]
 
-	// Move INhi -> INlo. Have to refer to as double-words vectors.
-	// Should interleave with above I guess
-	mov		z9.d,z14.d	
-	mov		z10.d,z15.d
-	mov		z11.d,z16.d
-	mov		z12.d,z17.d
 	mov		z13.d,z18.d
 
 .Lshort_tail_sve2:
@@ -1690,35 +1687,37 @@ poly1305_blocks_sve2:
 	// 5. If vl/2==2 - go to Last_reduce_sve2
 	// 6. continue with 2.
 	// NB: this part is skipped for 128-bit case (vl==2)
+	// For 256-bit, no intermediate loading is necessary - r^2 is already in [1].
+	//  So a special case can be easily implemented, when corresponding hardware is available.
 
 	// Load the intermediate r-power into the 0th lanes of vectors
+	// Interleave with broadcasting and S-vector calculation.
 	ldr		w10,[$pwr]
-	cpy		$SVE_R0,p1/m,w10
 	ldr		w11,[$pwr,#28]
-	cpy		$SVE_R1,p1/m,w11
 	ldr		w12,[$pwr,#56]
-	cpy		$SVE_R2,p1/m,w12
+	cpy		$SVE_R0,p1/m,w10
 	ldr		w13,[$pwr,#84]
-	cpy		$SVE_R3,p1/m,w13
+	cpy		$SVE_R1,p1/m,w11
+	dup		z0.q,z0.q[0]
 	ldr		w14,[$pwr,#112]
+	cpy		$SVE_R2,p1/m,w12
+	dup		z1.q,z1.q[0]
+	cpy		$SVE_R3,p1/m,w13
+	dup		z3.q,z3.q[0]
 	cpy		$SVE_R4,p1/m,w14
 	add		$pwr,$pwr,#4			// Increment pointer for the next iteration
-
-	dup		z0.q,z0.q[0]
-	dup		z1.q,z1.q[0]
-	dup		z3.q,z3.q[0]
 	dup		z5.q,z5.q[0]
 	dup		z7.q,z7.q[0]
 
-	adr     $SVE_S1,[$SVE_R1,$SVE_R1,lsl #2]
-	adr     $SVE_S2,[$SVE_R2,$SVE_R2,lsl #2]
-	adr     $SVE_S3,[$SVE_R3,$SVE_R3,lsl #2]
-	adr     $SVE_S4,[$SVE_R4,$SVE_R4,lsl #2]
-
-	add 	$SVE_INlo_0,$SVE_INlo_0,$SVE_H0
-	add 	$SVE_INlo_1,$SVE_INlo_1,$SVE_H1
+	// Interleaved hash contraction and S-vector calc.
 	add 	$SVE_INlo_2,$SVE_INlo_2,$SVE_H2
+	adr     $SVE_S1,[$SVE_R1,$SVE_R1,lsl #2]
+	add 	$SVE_INlo_0,$SVE_INlo_0,$SVE_H0
+	adr     $SVE_S2,[$SVE_R2,$SVE_R2,lsl #2]
+	add 	$SVE_INlo_1,$SVE_INlo_1,$SVE_H1
+	adr     $SVE_S3,[$SVE_R3,$SVE_R3,lsl #2]
 	add 	$SVE_INlo_3,$SVE_INlo_3,$SVE_H3
+	adr     $SVE_S4,[$SVE_R4,$SVE_R4,lsl #2]
 	add 	$SVE_INlo_4,$SVE_INlo_4,$SVE_H4
 
 	umullb	$SVE_ACC3,$SVE_INlo_0,${SVE_R3}[0]
@@ -1778,37 +1777,37 @@ poly1305_blocks_sve2:
 	////////////////////////////////////////////////////////////////
 
 	//Last hash addition - now everything stored in SVE_Hx
+	add 	$SVE_H2,$SVE_H2,$SVE_INlo_2
 	add 	$SVE_H0,$SVE_H0,$SVE_INlo_0
 	add 	$SVE_H1,$SVE_H1,$SVE_INlo_1
-	add 	$SVE_H2,$SVE_H2,$SVE_INlo_2
 	add 	$SVE_H3,$SVE_H3,$SVE_INlo_3
 	add 	$SVE_H4,$SVE_H4,$SVE_INlo_4
 
 	// Shift even lanes to odd lanes and set even to zero
 	//  because r^2 and r^1 are in lanes 1 and 3 of R-vectors
+	trn1	$SVE_H2,${SVE_MASK}.s,$SVE_H2
 	trn1	$SVE_H0,${SVE_MASK}.s,$SVE_H0
 	trn1	$SVE_H1,${SVE_MASK}.s,$SVE_H1
-	trn1	$SVE_H2,${SVE_MASK}.s,$SVE_H2
 	trn1	$SVE_H3,${SVE_MASK}.s,$SVE_H3
 	trn1	$SVE_H4,${SVE_MASK}.s,$SVE_H4
 
-	umullt	$SVE_ACC3,$SVE_H0,${SVE_R3}
-	umullt	$SVE_ACC4,$SVE_H0,${SVE_R4}
-	umullt	$SVE_ACC2,$SVE_H0,${SVE_R2}
-	umullt	$SVE_ACC0,$SVE_H0,${SVE_R0}
-	umullt	$SVE_ACC1,$SVE_H0,${SVE_R1}
+	umullt	$SVE_ACC3,$SVE_H2,${SVE_R1}
+	umullt	$SVE_ACC0,$SVE_H2,${SVE_S3}
+	umullt	$SVE_ACC4,$SVE_H2,${SVE_R2}
+	umullt	$SVE_ACC1,$SVE_H2,${SVE_S4}
+	umullt	$SVE_ACC2,$SVE_H2,${SVE_R0}
+
+	umlalt	$SVE_ACC3,$SVE_H0,${SVE_R3}
+	umlalt	$SVE_ACC4,$SVE_H0,${SVE_R4}
+	umlalt	$SVE_ACC2,$SVE_H0,${SVE_R2}
+	umlalt	$SVE_ACC0,$SVE_H0,${SVE_R0}
+	umlalt	$SVE_ACC1,$SVE_H0,${SVE_R1}
 
 	umlalt	$SVE_ACC3,$SVE_H1,${SVE_R2}
 	umlalt	$SVE_ACC4,$SVE_H1,${SVE_R3}
 	umlalt	$SVE_ACC0,$SVE_H1,${SVE_S4}
 	umlalt	$SVE_ACC2,$SVE_H1,${SVE_R1}
 	umlalt	$SVE_ACC1,$SVE_H1,${SVE_R0}
-
-	umlalt	$SVE_ACC3,$SVE_H2,${SVE_R1}
-	umlalt	$SVE_ACC0,$SVE_H2,${SVE_S3}
-	umlalt	$SVE_ACC4,$SVE_H2,${SVE_R2}
-	umlalt	$SVE_ACC1,$SVE_H2,${SVE_S4}
-	umlalt	$SVE_ACC2,$SVE_H2,${SVE_R0}
 
 	umlalt	$SVE_ACC3,$SVE_H3,${SVE_R0}
 	umlalt	$SVE_ACC0,$SVE_H3,${SVE_S2}
