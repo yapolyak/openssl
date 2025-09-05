@@ -111,7 +111,7 @@ poly1305_init:
 	csel	$d0,$d0,$r0,eq
 	csel	$d1,$d1,$r1,eq
 
-	tst	w17, #ARMV8_SVE2
+	tst	w17, #ARMV8_SVE2_POLY1305
 
 	adrp	$r0,poly1305_blocks_sve2
 	add	$r0,$r0,#:lo12:poly1305_blocks_sve2
