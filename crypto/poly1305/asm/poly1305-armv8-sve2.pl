@@ -1067,17 +1067,353 @@ poly1305_blocks_sve2:
 .size	poly1305_blocks_sve2,.-poly1305_blocks_sve2
 ___
 
-foreach (split("\n",$code)) {
-	s/\b(shrn\s+v[0-9]+)\.[24]d/$1.2s/			or
-	s/\b(fmov\s+)v([0-9]+)[^,]*,\s*x([0-9]+)/$1d$2,x$3/	or
-	(m/\bdup\b/ and (s/\.[24]s/.2d/g or 1))			or
-	(m/\b(eor|and)/ and (s/\.[248][sdh]/.16b/g or 1))	or
-	(m/\bum(ul|la)l\b/ and (s/\.4s/.2s/g or 1))		or
-	(m/\bum(ul|la)l2\b/ and (s/\.2s/.4s/g or 1))		or
-	(m/\bst[1-4]\s+{[^}]+}\[/ and (s/\.[24]d/.s/g or 1));
+##############################################################################
+#
+# SVE instruction encoder, adapted from chacha20-sve.pl
+#
+##############################################################################
 
-	s/\.[124]([sd])\[/.$1\[/;
+my $debug_encoder = 0;
 
-	print $_,"\n";
+{
+my  %opcode_unpred = (
+	"eor"          => 0x04a03000,
+	"add"          => 0x04200000,
+	"orr"          => 0x04603000,
+	"mov"          => 0x04603000, # Alias for ORR
+	"and"          => 0x04203000,
+	"lsl"          => 0x04209C00,
+	"lsr"          => 0x04209400,
+	"zip1"         => 0x05206000,
+	"zip2"         => 0x05206400,
+	"trn1"         => 0x05207000,
+	"dup_gpr"      => 0x05203800,
+	"dup_elem"     => 0x05302000,
+	"cntd"         => 0x04e0e000,
+	"tbl"          => 0x05203000,
+	"adr"          => 0x04a0a000,
+	"umullb"       => 0x44e0d000,
+    "umullt"       => 0x45c07c00,
+    "umlalb"       => 0x44e09000,
+    "umlalt"       => 0x44c04c00,
+	"shrnb"        => 0x45201000);
+
+my  %opcode_imm_unpred = (
+	"dup"          => 0x2538C000,
+	"index"        => 0x04204400);
+
+my %opcode_scalar_pred = (
+	"cpy"          => 0x0528A000);
+
+my  %opcode_pred = (
+	"whilelo"      => 0x25200C00,
+	"ptrue"        => 0x2518E000,
+	"ld4w"         => 0xA560E000,
+	"ld1w"         => 0xA540A000,
+	"revb"         => 0x05248000,
+    "uaddv"        => 0x04012000);
+
+my  %tsize = (
+	'b'          => 0,
+	'h'          => 1,
+	's'          => 2,
+	'd'          => 3,
+	'q'          => 3); # To handle dup zx.q,zx.q[i] case
+
+my %sf = (
+	"w"          => 0,
+	"x"          => 1);
+
+my %pattern = ("ALL" => 31);
+
+sub create_verifier {
+	my $filename="./compile_sve.sh";
+
+$scripts = <<'___';
+#! /bin/bash
+set -e
+CROSS_COMPILE=${CROSS_COMPILE:-'aarch64-linux-gnu-'}
+
+[ -z "$1" ] && exit 1
+INST_TO_COMPILE="$1"
+FILENAME_BASE=${1%% *}
+TMPFILE="/tmp/${FILENAME_BASE}_test"
+OBJDUMP_LOG="/tmp/${FILENAME_BASE}_objdump.log"
+
+echo "--- DEBUG INFO ---" >&2
+echo "Received \$1 (Instruction): '$1'" >&2
+echo "Using Filename Base: '$FILENAME_BASE'" >&2
+echo "------------------" >&2
+
+ARCH=`uname -p | xargs echo -n`
+
+if [ $ARCH == 'aarch64' ]; then
+    CC=gcc-11
+    AS=as
+    OBJDUMP=objdump
+else
+    CC=${CROSS_COMPILE}gcc
+    AS=${CROSS_COMPILE}as
+    OBJDUMP=${CROSS_COMPILE}objdump
+fi
+
+cat > "${TMPFILE}.c" << EOF
+extern __attribute__((noinline, section("disasm_output"))) void dummy_func()
+{
+    asm("$INST_TO_COMPILE");
 }
-close STDOUT or die "error closing STDOUT: $!";
+int main(int argc, char *argv[])
+{
+}
+EOF
+
+$CC -march=armv8.2-a+sve+sve2 -S -o "${TMPFILE}.s" "${TMPFILE}.c"
+
+$AS -march=armv8-a+sve2 -o "${TMPFILE}.o" "${TMPFILE}.s"
+
+#$OBJDUMP -d "${TMPFILE}.o" > "$OBJDUMP_LOG"
+
+#cat "$OBJDUMP_LOG" | awk -F"\n" -v RS="\n\n" '$1 ~ /dummy_func/' | awk 'FNR == 2 {printf "%s",$2}'
+$OBJDUMP -d "${TMPFILE}.o" | awk -F"\n" -v RS="\n\n" '$1 ~ /dummy_func/' | awk 'FNR == 2 {printf "%s",$2}'
+
+rm "${TMPFILE}.c" "${TMPFILE}.s" "${TMPFILE}.o"
+___
+	open(FH, '>', $filename) or die $!;
+	print FH $scripts;
+	close(FH);
+	system("chmod a+x ./compile_sve.sh");
+}
+
+sub compile_sve {
+	my $inst = shift;
+    return `./compile_sve.sh "$inst"`;
+}
+
+sub verify_inst {
+	my ($code,$inst)=@_;
+	my $hexcode = (sprintf "%08x", $code);
+
+	if ($debug_encoder == 1) {
+		my $expect=&compile_sve($inst);
+		if ($expect ne $hexcode) {
+			return (sprintf "%s // Encode Error! expect [%s] actual [%s]", $inst, $expect, $hexcode);
+		}
+	}
+	return (sprintf ".inst\t0x%s\t//%s", $hexcode, $inst);
+}
+
+sub reg_code {
+	my $code = shift;
+
+	if ($code == "zr") {
+		return "31";
+	}
+	return $code;
+}
+
+sub encode_size_imm() {
+	my ($mnemonic, $isize, $const)=@_;
+	my $esize = (8<<$tsize{$isize});
+	my $tsize_imm;
+	if ($mnemonic eq "shrnb") {
+        # Formula for narrowing shifts
+        $tsize_imm = $esize - $const;
+    } elsif ($mnemonic eq "lsr") {
+        # Formula for logical right shifts
+        $tsize_imm = 2*$esize - $const;
+    } else {
+        # Default formula for logical left shifts (lsl)
+        $tsize_imm = $esize + $const;
+    }
+	return (($tsize_imm>>5)<<22)|(($tsize_imm&0x1f)<<16);
+}
+
+sub sve_unpred {
+    my ($mnemonic,$arg)=@_;
+    my $inst = (sprintf "%s %s", $mnemonic,$arg);
+    # Special case: Widening multiplies (indexed and vector)
+    if (($mnemonic =~ /^(umull[bt]|umlal[bt])/) && $arg =~ m/z([0-9]+)\.d,\s*z([0-9]+)\.s,\s*z([0-9]+)\.s(\[([0-9]+)\])?/o) {
+        my ($zd, $zn, $zm, $indexed, $imm) = ($1, $2, $3, $4, $5);
+        my $opcode = $opcode_unpred{$mnemonic};
+        if ($indexed) {
+			# Split the 2-bit immediate index into its parts.
+            my $i2h = ($imm >> 1) & 0x1; # High bit of index
+            my $i2l = $imm & 0x1;       # Low bit of index
+            # Get the low 4 bits of the Zm register.
+            my $zm_low = $zm & 0xF;
+            return &verify_inst($opcode|($i2h << 20)|($zm_low << 16)|($i2l << 11)|($zn << 5)|$zd,$inst);
+        } else {
+            return &verify_inst($opcode|$zd|($zn<<5)|($zm<<16), $inst);
+        }
+    # Special case: 3-register vector ADR with lsl #2
+    } elsif ($mnemonic eq "adr" && $arg =~ m/z([0-9]+)\.s,\s*\[z([0-9]+)\.s,\s*z([0-9]+)\.s,\s*lsl\s*#2\]/o) {
+        my ($zd, $zn, $zm) = ($1, $2, $3);
+        my $opcode = $opcode_unpred{"adr"};
+        # Per the manual, the 'sz' bit (22) must be 0 for .s size.
+        # It is already 0 in our base, so we do nothing.
+        # The 'msz' field (bits 11-10) must be '10'. We achieve this by setting bit 11.
+        $opcode |= (1<<11);
+        return &verify_inst($opcode|$zd|($zn<<5)|($zm<<16), $inst);
+    # Special case: 'cntd xd' alias
+    } elsif ($mnemonic eq "cntd" && $arg =~ m/x([0-9]+)/o) {
+        my ($xd) = ($1);
+        my $opcode = $opcode_unpred{$mnemonic};
+        my $pattern_all = $pattern{"ALL"} << 5;
+        return &verify_inst($opcode|$xd|$pattern_all, $inst);
+    # Special parser for SHRNB's unique syntax (Zd.s, Zn.d, #imm)
+    } elsif ($mnemonic eq "shrnb" && $arg =~ m/z([0-9]+)\.[bhsd],\s*z([0-9]+)\.([bhsd]),\s*#([0-9]+)/o) {
+        my ($zd, $zn, $size_src, $imm) = ($1, $2, $3, $4);
+        my $opcode = $opcode_unpred{$mnemonic};
+        return &verify_inst($opcode|&encode_size_imm($mnemonic,$size_src,$imm)|($zn << 5)|$zd, $inst);
+	} elsif ($mnemonic eq "dup" && $arg =~ m/z([0-9]+)\.q,\s*z([0-9]+)\.q\[0\]/o) { # DUP from element
+        my ($zd, $zn) = ($1, $2);
+        my $opcode = $opcode_unpred{"dup_elem"};
+        return &verify_inst($opcode | ($zn << 5) | $zd, $inst);
+	} elsif ($mnemonic eq "dup" && $arg =~ m/z([0-9]+)\.([bhsdq]),\s*w([0-9]+)/o) { # DUP from GPR (wX/xX)
+        my ($zd, $size, $rn) = ($1, $2, $3);
+        my $opcode = $opcode_unpred{"dup_gpr"};
+        $opcode |= ($tsize{$size}<<22);
+        return &verify_inst($opcode|$zd|($rn<<5), $inst);
+	# Generic argument patterns
+    } elsif ($arg =~ m/z([0-9]+)\.([bhsdq]),\s*(.*)/o) {
+        my ($zd, $size, $regs) = ($1, $2, $3);
+        my $opcode = $opcode_unpred{$mnemonic};
+		# Handle shift-by-immediate separately due to its unique encoding.
+        if ($mnemonic eq "lsl" || $mnemonic eq "lsr") {
+            if ($regs =~ m/z([0-9]+)\.[bhsd],\s*#([0-9]+)/o) {
+                my ($zn, $imm) = ($1, $2);
+                return &verify_inst($opcode|$zd|($zn<<5)|&encode_size_imm($mnemonic,$size,$imm), $inst);
+            }
+        }
+		if ($mnemonic !~ /^(and|orr|eor|mov)$/) {
+        	$opcode |= ($tsize{$size}<<22);
+    	}
+        if ($regs =~ m/z([0-9]+)\.[bhsdq],\s*z([0-9]+)\.[bhsdq]/o) { # 3-operand vector
+            my ($zn, $zm) = ($1, $2);
+            return &verify_inst($opcode|$zd|($zn<<5)|($zm<<16), $inst);
+        } elsif ($regs =~ m/z([0-9]+)\.[bhsdq]/o) { # 2-operand vector (mov)
+            my $zn = $1;
+            my $zm = ($mnemonic eq "mov") ? $zn : 0;
+            return &verify_inst($opcode|$zd|($zn<<5)|($zm<<16), $inst);
+        } elsif ($regs =~ m/w([0-9]+),\s*#1/o) { # index
+            my ($rn, $rm) = ($1, 1);
+            $opcode = $opcode_imm_unpred{"index"};
+			$opcode |= ($tsize{$size}<<22);
+            return &verify_inst($opcode|$zd|($rn<<5)|($rm<<16), $inst);
+        } elsif ($regs =~ m/#(-?[0-9]+)/o) { # dup from immediate
+            my $imm = $1;
+            $opcode = $opcode_imm_unpred{"dup"};
+			$opcode |= ($tsize{$size}<<22);
+            my $imm_val = $imm & 0xff; # Only accounting for a simple case with zero shift.
+            return &verify_inst($opcode|$zd|($imm_val<<5), $inst);
+        }
+    }
+    sprintf "%s // fail to parse: %s", $mnemonic, $arg;
+}
+
+sub sve_pred {
+    my ($mnemonic, $arg)=@_;
+    my $inst = (sprintf "%s %s", $mnemonic,$arg);
+    # Special case: Multi-register loads (ld4w)
+    if ($arg =~ m/\{\s*z([0-9]+)\.s-z([0-9]+)\.s\s*\},\s*p([0-9]+)\/z,\s*\[(x[0-9]+)\]/o) {
+        my ($zt, $pg, $xn) = ($1, $3, $4);
+        $xn =~ s/x//;
+        my $opcode = $opcode_pred{$mnemonic};
+        return &verify_inst($opcode|$zt|($pg<<10)|($xn<<5), $inst);
+    # Special case: Single-register loads (ld1w)
+    } elsif ($arg =~ m/\{\s*z([0-9]+)\.s\s*\},\s*p([0-9]+)\/z,\s*\[(x[0-9]+)\]/o) {
+        my ($zt, $pg, $xn) = ($1, $2, $3);
+        $xn =~ s/x//;
+        my $opcode = $opcode_pred{$mnemonic};
+        return &verify_inst($opcode|$zt|($pg<<10)|($xn<<5), $inst);
+    # Special case: uaddv (scalar destination)
+    } elsif ($mnemonic eq "uaddv" && $arg =~ m/d([0-9]+),\s*p([0-9]+),\s*z([0-9]+)\.([bhsd])/o) {
+        my ($vd, $pg, $zn, $size) = ($1, $2, $3, $4);
+        my $opcode = $opcode_pred{$mnemonic};
+        return &verify_inst($opcode|($tsize{$size}<<22)|$vd|($pg<<10)|($zn<<5), $inst);
+    # Generic pattern: Starts with a predicate register (whilelo, ptrue)
+    } elsif ($arg =~ m/p([0-9]+)\.([bhsd]),\s*(.*)/o) {
+        my ($pd, $size, $regs) = ($1, $2, $3);
+        my $opcode = $opcode_pred{$mnemonic};
+        if ($regs =~ m/([wx])(zr|[0-9]+),\s*[wx](zr|[0-9]+)/o) { # whilelo
+            my ($sf_char, $rn, $rm) = ($1, $2, $3);
+            return &verify_inst($opcode|($tsize{$size}<<22)|$pd|($sf{$sf_char}<<12)|(&reg_code($rn)<<5)|(&reg_code($rm)<<16), $inst);
+        } elsif ($regs =~ m/(\w+)/o) { # ptrue
+            my $pat = $1;
+            return &verify_inst($opcode|($tsize{$size}<<22)|$pd|($pattern{$pat}<<5), $inst);
+        }
+    # Generic pattern: Starts with a vector register (cpy, revb)
+    } elsif ($arg =~ m/z([0-9]+)\.([bhsd]),\s*p([0-9]+)\/m,\s*(.*)/o) {
+        my ($zd, $size, $pg, $regs) = ($1, $2, $3, $4);
+        if ($regs =~ m/w([0-9]+)/o) { # CPY from GPR
+            my $wn = $1;
+            my $opcode = $opcode_scalar_pred{"cpy"};
+            return &verify_inst($opcode|($tsize{$size}<<22)|$zd|($pg<<10)|($wn<<5), $inst);
+        } elsif ($regs =~ m/z([0-9]+)\.([bhsd])/o) { # 2-operand predicated (revb)
+            my ($zn) = ($1);
+            my $opcode = $opcode_pred{$mnemonic};
+            return &verify_inst($opcode|($tsize{$size}<<22)|$zd|($pg<<10)|($zn<<5), $inst);
+        }
+    }
+    sprintf "%s // fail to parse: %s", $mnemonic, $arg;
+}
+
+open SELF,$0;
+while(<SELF>) {
+	next if (/^#!/);
+	last if (!s/^#/\/\// and !/^$/);
+	print;
+}
+close SELF;
+
+if ($debug_encoder == 1) {
+	&create_verifier();
+}
+
+foreach my $line (split("\n",$code)) {
+    my $original_line = $line;
+    my $encoded_line = "";
+    # Perform variable substitution
+    $line =~ s/\`([^\`]*)\`/eval($1)/ge;
+    # Predicated instructions
+    if ($line =~ /^\s*(\w+)\s+(z[0-9]+\.[bhsd],\s*p[0-9].*)/) {
+        $encoded_line = sve_pred($1, $2);
+    }
+	elsif ($line =~ /^\s*(\w+)\s+(d[0-9]+,\s*p[0-9].*)/) {
+        $encoded_line = sve_pred($1, $2);
+    }
+    elsif ($line =~ /^\s*(\w+[1-4][bhwd])\s+(\{\s*z[0-9]+.*\},\s*p[0-9]+.*)/) {
+        $encoded_line = sve_pred($1, $2);
+    }
+    elsif ($line =~ /^\s*(\w+)\s+(p[0-9]+\.[bhsd].*)/) {
+        $encoded_line = sve_pred($1, $2);
+    }
+    # Specific unpredicated instructions
+    elsif ($line =~ /^\s*(dup)\s+(z[0-9]+\.q,\s*z[0-9]+\.q\[0\])/) {
+        $encoded_line = sve_unpred($1, $2);
+    }
+    elsif ($line =~ /^\s*(dup)\s+(z[0-9]+\.[bhsdq],\s*(?:w|x)[0-9]+)/) {
+        $encoded_line = sve_unpred($1, $2);
+    }
+    elsif ($line =~ /^\s*(mov)\s+(z[0-9]+\.d,\s*z[0-9]+\.d)/) {
+        $encoded_line = sve_unpred("mov", $2);
+    }
+    elsif ($line =~ /^\s*(umull[bt]|umlal[bt])\s+(z[0-9]+\.d,\s*z[0-9]+\.s,\s*z[0-9]+\.s(?:\[[0-9]+\])?)/) {
+        $encoded_line = sve_unpred($1, $2);
+    }
+    elsif ($line =~ /^\s*(cntd)\s+((x|w)[0-9]+.*)/) {
+        $encoded_line = sve_unpred($1, $2);
+    }
+    # 3. Generic Unpredicated "catch-all"
+    elsif ($line =~ /^\s*(\w+)\s+(z[0-9]+\.[bhsdq].*)/) {
+        $encoded_line = sve_unpred($1, $2);
+    }
+    if ($encoded_line) {
+        print $encoded_line, "\n";
+    } else {
+        print $original_line, "\n";
+    }
+}
+
+}
+ STDOUT or die "error closing STDOUT: $!";
