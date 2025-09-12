@@ -108,7 +108,9 @@ $code.=<<___;
 
 .text
 
-.arch armv8-a+sve2
+.arch armv8-a
+
+.extern poly1305_blocks
 
 // --- poly1305_sw_2_26 ---
 // Performs conversion of 3 base2_44 to 5 base2_26 scalars and
