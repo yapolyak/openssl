@@ -227,10 +227,11 @@ ___
 
 # sbox operation for one single word
 sub sbox_1word () {
-	my $word = shift;
+	#my $word = shift;
+	my ($tmp0, $tmp1) = ("v14", "v15"); # Temporaries
 
 $code.=<<___;
-	mov	@vtmp[3].s[0],$word
+	//mov	@vtmp[3].s[0],$word
 	// optimize sbox using AESE instruction
 	tbl	@vtmp[0].16b, {@vtmp[3].16b}, $MaskV.16b
 ___
@@ -242,57 +243,72 @@ ___
 	&mul_matrix(@vtmp[0], $ATAHMatV, $ATALMatV, @vtmp[2]);
 $code.=<<___;
 
-	mov	$wtmp0,@vtmp[0].s[0]
-	eor	$word,$wtmp0,$wtmp0,ror #32-2
-	eor	$word,$word,$wtmp0,ror #32-10
-	eor	$word,$word,$wtmp0,ror #32-18
-	eor	$word,$word,$wtmp0,ror #32-24
+	//mov	$wtmp0,@vtmp[0].s[0]
+	dup	@vtmp[0].4s,@vtmp[0].s[0]
+	sli	$tmp0.4s, @vtmp[0].4s, #2
+    eor	$vtmp[0].16b,$vtmp[0].16b,@vtmp[0].16b
+	sli	$tmp0.4s, @vtmp[0].4s, #10
+    eor	$vtmp[0].16b,$vtmp[0].16b,@vtmp[0].16b
+	sli	$tmp0.4s, @vtmp[0].4s, #18
+    eor	$vtmp[0].16b,$vtmp[0].16b,@vtmp[0].16b
+	sli	$tmp0.4s, @vtmp[0].4s, #24
+    eor	$vtmp[0].16b,$vtmp[0].16b,@vtmp[0].16b
+	//eor	$word,$wtmp0,$wtmp0,ror #32-2
+	//eor	$word,$word,$wtmp0,ror #32-10
+	//eor	$word,$word,$wtmp0,ror #32-18
+	//eor	$word,$word,$wtmp0,ror #32-24
 ___
 }
 
 # sm4 for one block of data, in scalar registers word0/word1/word2/word3
+# This should really be inlined for better interleaving to hide latency of loads
 sub sm4_1blk () {
-	my $kptr = shift;
+	# my $kptr = shift;
+	my ($state, $kptr) = @_; # <-- Accepts the state register name
+    my ($rks, $sbox_inputs, $tmp1, $tmp2) = ("v12", "v13", "v14", "v15");
 
 $code.=<<___;
-	ldp	$wtmp0,$wtmp1,[$kptr],8
-	// B0 ^= SBOX(B1 ^ B2 ^ B3 ^ RK0)
-	eor	$tmpw,$word2,$word3
-	eor	$wtmp2,$wtmp0,$word1
-	eor	$tmpw,$tmpw,$wtmp2
-	// Pre-load next round keys
-	ldp	w16,w17,[$kptr],8
+	ld1 {$rks.4s}, [$kptr], #16         // Pre-load all 4 round keys
+
+	// Parallel pre-calculation of S-Box inputs for all 4 rounds
+    // This implements V = [B0^B1^B2^RK3, B1^B2^B3^RK0, B2^B3^B0^RK1, B3^B0^B1^RK2]
+	ext	$tmp1.16b,$state.16b,$state.16b,#4		// tmp1 -> (B1, B2, B3, B0)
+	ext	$tmp2.16b,$state.16b,$state.16b,#8		// tmp2 -> (B2, B3, B0, B1)
+	ext	$rks.16b,$rks.16b,$rks.16b,#12			// rks -> (RK3, RK0, RK1, RK2)
+	eor	$sbox_inputs.16b,$state.16b,$tmp1.16b	// sbox_inputs -> (B0^B1, B1^B2, B2^B3, B3^B0)
+	eor	$tmp2.16b,$tmp2.16b,$rks.16b			// tmp2 -> (B2^RK3, B3^RK0, B0^RK1, B1^RK2)
+	eor	$sbox_inputs.16b,$sbox_inputs.16b,$tmp2.16b	// sbox_inputs -> (B0^B1^B2^RK3, B1^B2^B3^RK0, B2^B3^B0^RK1, B3^B0^B1^RK2)
+
+	// SBOX(B1 ^ B2 ^ B3 ^ RK0)
+	mov	@vtmp[3].s[0],$sbox_inputs.s[1]
 ___
-	&sbox_1word($tmpw);
+	&sbox_1word();
 $code.=<<___;
-	eor	$word0,$word0,$tmpw
-	// B1 ^= SBOX(B0 ^ B2 ^ B3 ^ RK1)
-	eor	$tmpw,$word2,$word3
-	eor	$wtmp2,$word0,$wtmp1
-	eor	$tmpw,$tmpw,$wtmp2
+	eor	$sbox_inputs.16b,$sbox_inputs.16b,@vtmp[0].16b	// V ^= SBOX(B1 ^ B2 ^ B3 ^ RK0)
+    eor	$state.s[0],$state.s[0],@vtmp[0].s[0]			// B0' = B0 ^ SBOX(B1 ^ B2 ^ B3 ^ RK0)
+
+	// SBOX(B0' ^ B2 ^ B3 ^ RK1)
+	mov	@vtmp[3].s[0],$sbox_inputs.s[2]
 ___
-	&sbox_1word($tmpw);
+	&sbox_1word();
 $code.=<<___;
-	//ldp	$wtmp0,$wtmp1,[$kptr],8
-	eor	$word1,$word1,$tmpw
-	// B2 ^= SBOX(B0 ^ B1 ^ B3 ^ RK2)
-	eor	$tmpw,$word0,$word1
-	//eor	$wtmp2,$wtmp0,$word3
-	eor	$wtmp2,w16,$word3
-	eor	$tmpw,$tmpw,$wtmp2
+	eor	$sbox_inputs.16b,$sbox_inputs.16b,@vtmp[0].16b	// V ^= SBOX(B0' ^ B2 ^ B3 ^ RK1)
+    eor	$state.s[1],$state.s[1],@vtmp[0].s[0]			// B1' = B1 ^ SBOX(B0' ^ B2 ^ B3 ^ RK1)
+
+	// SBOX(B0' ^ B1' ^ B3 ^ RK2)
+	mov	@vtmp[3].s[0],$sbox_inputs.s[3]
 ___
-	&sbox_1word($tmpw);
+	&sbox_1word();
 $code.=<<___;
-	eor	$word2,$word2,$tmpw
-	// B3 ^= SBOX(B0 ^ B1 ^ B2 ^ RK3)
-	eor	$tmpw,$word0,$word1
-	//eor	$wtmp2,$word2,$wtmp1
-	eor	$wtmp2,$word2,w17
-	eor	$tmpw,$tmpw,$wtmp2
+	eor	$sbox_inputs.16b,$sbox_inputs.16b,@vtmp[0].16b	// V ^= SBOX(B0' ^ B1' ^ B3 ^ RK2)
+    eor	$state.s[2],$state.s[2],@vtmp[0].s[0]			// B2' = B2 ^ SBOX(B0' ^ B1' ^ B3 ^ RK2)
+
+	// SBOX(B0' ^ B1' ^ B2' ^ RK3)
+	mov	@vtmp[3].s[0],$sbox_inputs.s[0]
 ___
-	&sbox_1word($tmpw);
+	&sbox_1word();
 $code.=<<___;
-	eor	$word3,$word3,$tmpw
+    eor	$state.s[3],$state.s[3],@vtmp[0].s[0]			// B3' = B3 ^ SBOX(B0' ^ B1' ^ B2' ^ RK3)
 ___
 }
 
@@ -413,20 +429,22 @@ sub encrypt_1blk_norev() {
 $code.=<<___;
 	mov	$ptr,$rks
 	mov	$counter,#8
-	mov	$word0,$dat.s[0]
-	mov	$word1,$dat.s[1]
-	mov	$word2,$dat.s[2]
-	mov	$word3,$dat.s[3]
+	//mov	$word0,$dat.s[0]
+	//mov	$word1,$dat.s[1]
+	//mov	$word2,$dat.s[2]
+	//mov	$word3,$dat.s[3]
 10:
 ___
-	&sm4_1blk($ptr);
+	&sm4_1blk($dat, $ptr);
 $code.=<<___;
 	subs	$counter,$counter,#1
 	b.ne	10b
-	mov	$dat.s[0],$word3
-	mov	$dat.s[1],$word2
-	mov	$dat.s[2],$word1
-	mov	$dat.s[3],$word0
+	rev64	$dat.4s,$dat.4s
+	ext		$dat.16b,$dat.16b,$dat.16b,#8  // Check this!
+	//mov	$dat.s[0],$word3
+	//mov	$dat.s[1],$word2
+	//mov	$dat.s[2],$word1
+	//mov	$dat.s[3],$word0
 ___
 }
 
