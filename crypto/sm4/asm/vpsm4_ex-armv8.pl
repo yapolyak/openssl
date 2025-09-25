@@ -228,12 +228,13 @@ ___
 # sbox operation for one single word
 sub sbox_1word () {
 	#my $word = shift;
-	my ($tmp0, $tmp1) = ("v14", "v15"); # Temporaries
+	my ($tmp0, $tmp1, $tmp2, $tmp3, $tmp4) = ("v12", "v14", "v15", "v24", "v25"); # Temporaries
 
 $code.=<<___;
 	//mov	@vtmp[3].s[0],$word
 	// optimize sbox using AESE instruction
-	tbl	@vtmp[0].16b, {@vtmp[3].16b}, $MaskV.16b
+	//tbl	@vtmp[0].16b, {@vtmp[3].16b}, $MaskV.16b
+	tbl	@vtmp[0].16b, {$vtmp5.16b}, $MaskV.16b
 ___
 	&mul_matrix(@vtmp[0], $TAHMatV, $TALMatV, @vtmp[2]);
 $code.=<<___;
@@ -244,15 +245,45 @@ ___
 $code.=<<___;
 
 	//mov	$wtmp0,@vtmp[0].s[0]
-	dup	@vtmp[0].4s,@vtmp[0].s[0]
-	sli	$tmp0.4s, @vtmp[0].4s, #2
-    eor	$vtmp[0].16b,$vtmp[0].16b,@vtmp[0].16b
-	sli	$tmp0.4s, @vtmp[0].4s, #10
-    eor	$vtmp[0].16b,$vtmp[0].16b,@vtmp[0].16b
-	sli	$tmp0.4s, @vtmp[0].4s, #18
-    eor	$vtmp[0].16b,$vtmp[0].16b,@vtmp[0].16b
-	sli	$tmp0.4s, @vtmp[0].4s, #24
-    eor	$vtmp[0].16b,$vtmp[0].16b,@vtmp[0].16b
+	//dup	@vtmp[0].4s,@vtmp[0].s[0]
+
+	ushr	$tmp0.4s,@vtmp[0].4s,32-2
+	ushr	$tmp1.4s,@vtmp[0].4s,32-10
+	ushr	$tmp2.4s,@vtmp[0].4s,32-18
+	ushr	$tmp3.4s,@vtmp[0].4s,32-24
+	sli		$tmp0.4s,@vtmp[0].4s,#2
+	sli		$tmp1.4s,@vtmp[0].4s,#10
+	sli		$tmp2.4s,@vtmp[0].4s,#18
+	sli		$tmp3.4s,@vtmp[0].4s,#24
+	eor		$tmp0.16b,$tmp0.16b,@vtmp[0].16b
+	eor 	$tmp1.16b,$tmp1.16b,$tmp2.16b
+	eor 	@vtmp[0].16b,$tmp0.16b,$tmp1.16b
+	eor 	@vtmp[0].16b,@vtmp[0].16b,$tmp3.16b
+
+    # --- rotl(B, 2) ---
+	//sli		$tmp0.4s,@vtmp[0].4s,#2
+	//ushr	$tmp1.4s,@vtmp[0].4s,#30
+	//orr		$tmp0.16b,$tmp0.16b,$tmp1.16b
+	//eor		$tmp4.16b,@vtmp[0].16b,$tmp0.16b
+
+    # --- rotl(B, 10) ---
+	//sli		$tmp2.4s,@vtmp[0].4s,#10
+	//ushr	$tmp3.4s,@vtmp[0].4s,#22
+	//orr		$tmp2.16b,$tmp2.16b,$tmp3.16b
+	//eor		$tmp4.16b,$tmp4.16b,$tmp2.16b
+
+    # --- rotl(B, 18) ---
+	//sli		$tmp0.4s,@vtmp[0].4s,#18
+	//ushr	$tmp1.4s,@vtmp[0].4s,#14
+	//orr		$tmp0.16b,$tmp0.16b,$tmp1.16b
+	//eor		$tmp4.16b,$tmp4.16b,$tmp0.16b
+
+    # --- rotl(B, 24) ---
+	//sli		$tmp2.4s,@vtmp[0].4s,#24
+	//ushr	$tmp3.4s,@vtmp[0].4s,#8
+	//orr		$tmp2.16b,$tmp2.16b,$tmp3.16b
+	//eor		@vtmp[0].16b,$tmp4.16b,$tmp2.16b
+
 	//eor	$word,$wtmp0,$wtmp0,ror #32-2
 	//eor	$word,$word,$wtmp0,ror #32-10
 	//eor	$word,$word,$wtmp0,ror #32-18
@@ -280,35 +311,51 @@ $code.=<<___;
 	eor	$sbox_inputs.16b,$sbox_inputs.16b,$tmp2.16b	// sbox_inputs -> (B0^B1^B2^RK3, B1^B2^B3^RK0, B2^B3^B0^RK1, B3^B0^B1^RK2)
 
 	// SBOX(B1 ^ B2 ^ B3 ^ RK0)
-	mov	@vtmp[3].s[0],$sbox_inputs.s[1]
+	//mov	$vtmp5.s[0],$sbox_inputs.s[1]
+	dup	$vtmp5.4s,$sbox_inputs.s[1]
 ___
 	&sbox_1word();
 $code.=<<___;
+	dup	$tmp2.4s,$state.s[0]
 	eor	$sbox_inputs.16b,$sbox_inputs.16b,@vtmp[0].16b	// V ^= SBOX(B1 ^ B2 ^ B3 ^ RK0)
-    eor	$state.s[0],$state.s[0],@vtmp[0].s[0]			// B0' = B0 ^ SBOX(B1 ^ B2 ^ B3 ^ RK0)
+	eor	$tmp2.16b,$tmp2.16b,@vtmp[0].16b
+	mov	$state.s[0],$tmp2.s[0]
+    //eor	$state.s[0],$state.s[0],@vtmp[0].s[0]			// B0' = B0 ^ SBOX(B1 ^ B2 ^ B3 ^ RK0)
 
 	// SBOX(B0' ^ B2 ^ B3 ^ RK1)
-	mov	@vtmp[3].s[0],$sbox_inputs.s[2]
+	//mov	$vtmp5.s[0],$sbox_inputs.s[2]
+	dup	$vtmp5.4s,$sbox_inputs.s[2]
 ___
 	&sbox_1word();
 $code.=<<___;
+	dup	$tmp2.4s,$state.s[1]
 	eor	$sbox_inputs.16b,$sbox_inputs.16b,@vtmp[0].16b	// V ^= SBOX(B0' ^ B2 ^ B3 ^ RK1)
-    eor	$state.s[1],$state.s[1],@vtmp[0].s[0]			// B1' = B1 ^ SBOX(B0' ^ B2 ^ B3 ^ RK1)
+	eor	$tmp2.16b,$tmp2.16b,@vtmp[0].16b
+	mov	$state.s[1],$tmp2.s[0]
+    //eor	$state.s[1],$state.s[1],@vtmp[0].s[0]			// B1' = B1 ^ SBOX(B0' ^ B2 ^ B3 ^ RK1)
 
 	// SBOX(B0' ^ B1' ^ B3 ^ RK2)
-	mov	@vtmp[3].s[0],$sbox_inputs.s[3]
+	//mov	$vtmp5.s[0],$sbox_inputs.s[3]
+	dup	$vtmp5.4s,$sbox_inputs.s[3]
 ___
 	&sbox_1word();
 $code.=<<___;
+	dup	$tmp2.4s,$state.s[2]
 	eor	$sbox_inputs.16b,$sbox_inputs.16b,@vtmp[0].16b	// V ^= SBOX(B0' ^ B1' ^ B3 ^ RK2)
-    eor	$state.s[2],$state.s[2],@vtmp[0].s[0]			// B2' = B2 ^ SBOX(B0' ^ B1' ^ B3 ^ RK2)
+	eor	$tmp2.16b,$tmp2.16b,@vtmp[0].16b
+	mov	$state.s[2],$tmp2.s[0]
+    //eor	$state.s[2],$state.s[2],@vtmp[0].s[0]			// B2' = B2 ^ SBOX(B0' ^ B1' ^ B3 ^ RK2)
 
 	// SBOX(B0' ^ B1' ^ B2' ^ RK3)
-	mov	@vtmp[3].s[0],$sbox_inputs.s[0]
+	//mov	$vtmp5.s[0],$sbox_inputs.s[0]
+	dup	$vtmp5.4s,$sbox_inputs.s[0]
 ___
 	&sbox_1word();
 $code.=<<___;
-    eor	$state.s[3],$state.s[3],@vtmp[0].s[0]			// B3' = B3 ^ SBOX(B0' ^ B1' ^ B2' ^ RK3)
+	dup	$tmp2.4s,$state.s[3]
+	eor	$tmp2.16b,$tmp2.16b,@vtmp[0].16b
+	mov	$state.s[3],$tmp2.s[0]
+    //eor	$state.s[3],$state.s[3],@vtmp[0].s[0]			// B3' = B3 ^ SBOX(B0' ^ B1' ^ B2' ^ RK3)
 ___
 }
 
