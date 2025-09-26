@@ -912,95 +912,12 @@ ${prefix}_cbc_encrypt:
 	lsr	$len,$len,4
 	cbz	$enc,.Ldec
 	
-	// ABI Compliance: Save callee-saved registers x19, x20 to the stack
+	// ABI Compliance: save some callee-saved registers to the stack
     stp x19, x20, [sp, #-16]!
 
 	ldp $iv_lo, $iv_hi, [$ivp]
-.Lcbc_4_blocks_enc:
-	cmp	$blocks,#4
-	b.lt	.Lcbc_cleanup_scalar
-
-	// Block 0
-	ldp $data_lo, $data_hi, [$inp], #16
-	eor $data_lo, $data_lo, $iv_lo
-	eor $data_hi, $data_hi, $iv_hi
-	rev32	$data_lo,$data_lo
-	rev32	$data_hi,$data_hi
-	lsr x13, x12, #32
-	lsr x15, x14, #32
-___
-	&encrypt_1blk_norev_scalar();
-$code.=<<___;
-	orr x13, x13, x12, lsl #32
-	orr x15, x15, x14, lsl #32
-	rev32	x13,x13
-	rev32	x15,x15
-	stp x15, x13, [$outp], #16
-	mov $iv_lo, x15
-	mov $iv_hi, x13
-
-    // Block 1
-	ldp $data_lo, $data_hi, [$inp], #16
-	eor $data_lo, $data_lo, $iv_lo
-	eor $data_hi, $data_hi, $iv_hi
-	rev32	$data_lo,$data_lo
-	rev32	$data_hi,$data_hi
-	lsr x13, x12, #32
-	lsr x15, x14, #32
-___
-	&encrypt_1blk_norev_scalar();
-$code.=<<___;
-	orr x13, x13, x12, lsl #32
-	orr x15, x15, x14, lsl #32
-	rev32	x13,x13
-	rev32	x15,x15
-	stp x15, x13, [$outp], #16
-	mov $iv_lo, x15
-	mov $iv_hi, x13
-
-    // Block 2
-    ldp $data_lo, $data_hi, [$inp], #16
-    eor $data_lo, $data_lo, $iv_lo
-    eor $data_hi, $data_hi, $iv_hi
-	rev32	$data_lo,$data_lo
-	rev32	$data_hi,$data_hi
-    lsr x13, x12, #32
-    lsr x15, x14, #32
-___
-	&encrypt_1blk_norev_scalar();
-$code.=<<___;
-	orr x13, x13, x12, lsl #32
-	orr x15, x15, x14, lsl #32
-	rev32	x13,x13
-	rev32	x15,x15
-	stp x15, x13, [$outp], #16
-	mov $iv_lo, x15
-	mov $iv_hi, x13
-
-    // Block 3
-    ldp $data_lo, $data_hi, [$inp], #16
-    eor $data_lo, $data_lo, $iv_lo
-    eor $data_hi, $data_hi, $iv_hi
-	rev32	$data_lo,$data_lo
-	rev32	$data_hi,$data_hi
-    lsr x13, x12, #32
-    lsr x15, x14, #32
-___
-	&encrypt_1blk_norev_scalar();
-$code.=<<___;
-	orr x13, x13, x12, lsl #32
-	orr x15, x15, x14, lsl #32
-	rev32	x13,x13
-	rev32	x15,x15
-	stp x15, x13, [$outp], #16
-	mov $iv_lo, x15
-	mov $iv_hi, x13
-
-	subs	$blocks,$blocks,#4
-	b.ne	.Lcbc_4_blocks_enc
-.Lcbc_cleanup_scalar:
-    cbz $blocks, .Lcbc_done_scalar
 .Lcbc_single_block_loop:
+	cbz $blocks, .Lcbc_done_scalar
 	subs	$blocks,$blocks,#1
 	ldp $data_lo, $data_hi, [$inp], #16
 	eor $data_lo, $data_lo, $iv_lo
@@ -1019,7 +936,8 @@ $code.=<<___;
 	stp x15, x13, [$outp], #16
 	mov $iv_lo, x15
 	mov $iv_hi, x13
-	cbnz $blocks, .Lcbc_single_block_loop
+	b .Lcbc_single_block_loop
+
 .Lcbc_done_scalar:
 	stp $iv_lo, $iv_hi, [$ivp]
 	// ABI Compliance: Restore callee-saved registers
