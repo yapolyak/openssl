@@ -435,6 +435,20 @@ $code.=<<___;
 ___
 }
 
+sub encrypt_1blk_norev_scalar() {
+
+$code.=<<___;
+	mov	$ptr,$rks
+	mov	$counter,#8
+10:
+___
+	&sm4_1blk($ptr);
+$code.=<<___;
+	subs	$counter,$counter,#1
+	b.ne	10b
+___
+}
+
 sub encrypt_1blk_norev() {
 	my $dat = shift;
 
@@ -885,6 +899,9 @@ ___
 my ($len,$ivp,$enc)=("x2","x4","w5");
 my $ivec0=("v3");
 my $ivec1=("v15");
+my ($iv_lo, $iv_hi) = ("x19", "x20");
+my ($data_lo, $data_hi) = ("x12", "x14");
+my ($word0,$word1,$word2,$word3)=("w12","w13","w14","w15");
 
 $code.=<<___;
 .globl	${prefix}_cbc_encrypt
@@ -893,59 +910,120 @@ $code.=<<___;
 ${prefix}_cbc_encrypt:
 	AARCH64_VALID_CALL_TARGET
 	lsr	$len,$len,4
-___
-	&load_sbox();
-$code.=<<___;
 	cbz	$enc,.Ldec
-	ld1	{$ivec0.4s},[$ivp]
+	
+	// ABI Compliance: Save callee-saved registers x19, x20 to the stack
+    stp x19, x20, [sp, #-16]!
+
+	ldp $iv_lo, $iv_hi, [$ivp]
 .Lcbc_4_blocks_enc:
 	cmp	$blocks,#4
-	b.lt	1f
-	ld1	{@data[0].4s,@data[1].4s,@data[2].4s,@data[3].4s},[$inp],#64
-	eor	@data[0].16b,@data[0].16b,$ivec0.16b
-___
-	&rev32(@data[1],@data[1]);
-	&rev32(@data[0],@data[0]);
-	&rev32(@data[2],@data[2]);
-	&rev32(@data[3],@data[3]);
-	&encrypt_1blk_norev(@data[0]);
-$code.=<<___;
-	eor	@data[1].16b,@data[1].16b,@data[0].16b
-___
-	&encrypt_1blk_norev(@data[1]);
-	&rev32(@data[0],@data[0]);
+	b.lt	.Lcbc_cleanup_scalar
 
-$code.=<<___;
-	eor	@data[2].16b,@data[2].16b,@data[1].16b
+	// Block 0
+	ldp $data_lo, $data_hi, [$inp], #16
+	eor $data_lo, $data_lo, $iv_lo
+	eor $data_hi, $data_hi, $iv_hi
+	rev32	$data_lo,$data_lo
+	rev32	$data_hi,$data_hi
+	lsr x13, x12, #32
+	lsr x15, x14, #32
 ___
-	&encrypt_1blk_norev(@data[2]);
-	&rev32(@data[1],@data[1]);
+	&encrypt_1blk_norev_scalar();
 $code.=<<___;
-	eor	@data[3].16b,@data[3].16b,@data[2].16b
+	orr x13, x13, x12, lsl #32
+	orr x15, x15, x14, lsl #32
+	rev32	x13,x13
+	rev32	x15,x15
+	stp x15, x13, [$outp], #16
+	mov $iv_lo, x15
+	mov $iv_hi, x13
+
+    // Block 1
+	ldp $data_lo, $data_hi, [$inp], #16
+	eor $data_lo, $data_lo, $iv_lo
+	eor $data_hi, $data_hi, $iv_hi
+	rev32	$data_lo,$data_lo
+	rev32	$data_hi,$data_hi
+	lsr x13, x12, #32
+	lsr x15, x14, #32
 ___
-	&encrypt_1blk_norev(@data[3]);
-	&rev32(@data[2],@data[2]);
-	&rev32(@data[3],@data[3]);
+	&encrypt_1blk_norev_scalar();
 $code.=<<___;
-	orr	$ivec0.16b,@data[3].16b,@data[3].16b
-	st1	{@data[0].4s,@data[1].4s,@data[2].4s,@data[3].4s},[$outp],#64
+	orr x13, x13, x12, lsl #32
+	orr x15, x15, x14, lsl #32
+	rev32	x13,x13
+	rev32	x15,x15
+	stp x15, x13, [$outp], #16
+	mov $iv_lo, x15
+	mov $iv_hi, x13
+
+    // Block 2
+    ldp $data_lo, $data_hi, [$inp], #16
+    eor $data_lo, $data_lo, $iv_lo
+    eor $data_hi, $data_hi, $iv_hi
+	rev32	$data_lo,$data_lo
+	rev32	$data_hi,$data_hi
+    lsr x13, x12, #32
+    lsr x15, x14, #32
+___
+	&encrypt_1blk_norev_scalar();
+$code.=<<___;
+	orr x13, x13, x12, lsl #32
+	orr x15, x15, x14, lsl #32
+	rev32	x13,x13
+	rev32	x15,x15
+	stp x15, x13, [$outp], #16
+	mov $iv_lo, x15
+	mov $iv_hi, x13
+
+    // Block 3
+    ldp $data_lo, $data_hi, [$inp], #16
+    eor $data_lo, $data_lo, $iv_lo
+    eor $data_hi, $data_hi, $iv_hi
+	rev32	$data_lo,$data_lo
+	rev32	$data_hi,$data_hi
+    lsr x13, x12, #32
+    lsr x15, x14, #32
+___
+	&encrypt_1blk_norev_scalar();
+$code.=<<___;
+	orr x13, x13, x12, lsl #32
+	orr x15, x15, x14, lsl #32
+	rev32	x13,x13
+	rev32	x15,x15
+	stp x15, x13, [$outp], #16
+	mov $iv_lo, x15
+	mov $iv_hi, x13
+
 	subs	$blocks,$blocks,#4
 	b.ne	.Lcbc_4_blocks_enc
-	b	2f
-1:
+.Lcbc_cleanup_scalar:
+    cbz $blocks, .Lcbc_done_scalar
+.Lcbc_single_block_loop:
 	subs	$blocks,$blocks,#1
-	b.lt	2f
-	ld1	{@data[0].4s},[$inp],#16
-	eor	$ivec0.16b,$ivec0.16b,@data[0].16b
+	ldp $data_lo, $data_hi, [$inp], #16
+	eor $data_lo, $data_lo, $iv_lo
+	eor $data_hi, $data_hi, $iv_hi
+	rev32	$data_lo,$data_lo
+	rev32	$data_hi,$data_hi
+	lsr x13, x12, #32
+	lsr x15, x14, #32
 ___
-	&rev32($ivec0,$ivec0);
-	&encrypt_1blk($ivec0);
+	&encrypt_1blk_norev_scalar();
 $code.=<<___;
-	st1	{$ivec0.4s},[$outp],#16
-	b	1b
-2:
-	// save back IV
-	st1	{$ivec0.4s},[$ivp]
+	orr x13, x13, x12, lsl #32
+	orr x15, x15, x14, lsl #32
+	rev32	x13,x13
+	rev32	x15,x15
+	stp x15, x13, [$outp], #16
+	mov $iv_lo, x15
+	mov $iv_hi, x13
+	cbnz $blocks, .Lcbc_single_block_loop
+.Lcbc_done_scalar:
+	stp $iv_lo, $iv_hi, [$ivp]
+	// ABI Compliance: Restore callee-saved registers
+	ldp x19, x20, [sp], #16
 	ret
 
 .Ldec:
