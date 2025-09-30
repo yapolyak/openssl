@@ -945,6 +945,9 @@ $code.=<<___;
 	ret
 
 .Ldec:
+___
+	&load_sbox();
+$code.=<<___;
 	// decryption mode starts
 	AARCH64_SIGN_LINK_REGISTER
 	stp	d8,d9,[sp,#-80]!
