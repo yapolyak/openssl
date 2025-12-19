@@ -128,50 +128,59 @@ $code.=<<___;
 	 */
 
     /* Prefilter sboxes */
-___
-    &filter_8bit_neon_3op($v_t4, $v_ab, $pre_s1lo_mask, $pre_s1hi_mask, $_0f0f0f0fmask, $v_t2);
-    &filter_8bit_neon_3op($v_x, $v_ab, $pre_s4lo_mask, $pre_s4hi_mask, $_0f0f0f0fmask, $v_t2);
-$code.=<<___;
+    and     $v_t2.16b,$v_ab.16b,$_0f0f0f0fmask.16b
+    and     $v_t3.16b,$v_ab.16b,$_0f0f0f0fmask.16b
+
+    ushr    $v_t4.16b,$v_ab.16b,#4
+    ushr    $v_x.16b,$v_ab.16b,#4
+    
+    tbl     $v_t2.16b,{$pre_s1lo_mask.16b},$v_t2.16b
+    tbl     $v_t3.16b,{$pre_s4lo_mask.16b},$v_t3.16b
+    
+    tbl     $v_t4.16b,{$pre_s1hi_mask.16b},$v_t4.16b
+    tbl     $v_x.16b,{$pre_s4hi_mask.16b},$v_x.16b
+    
+    eor     $v_t4.16b,$v_t4.16b,$v_t2.16b
+    eor     $v_x.16b,$v_x.16b,$v_t3.16b
 
     /* AES subbytes + AES shift rows */
     aese    $v_t4.16b,$v_zero.16b
     aese    $v_x.16b,$v_zero.16b
 
     /* Postfilter sboxes */
-___
-    &filter_8bit_neon($v_t4, $post_s1lo_mask, $post_s1hi_mask, $_0f0f0f0fmask, $v_t2);
-    &filter_8bit_neon($v_x, $post_s1lo_mask, $post_s1hi_mask, $_0f0f0f0fmask, $v_t2);
-$code.=<<___;
+    and     $v_t0.16b,$v_t4.16b,$_0f0f0f0fmask.16b
+    and     $v_t1.16b,$v_x.16b,$_0f0f0f0fmask.16b
+    
+    ushr    $v_t4.16b,$v_t4.16b,#4
+    ushr    $v_x.16b,$v_x.16b,#4
+    
+    tbl     $v_t0.16b,{$post_s1lo_mask.16b},$v_t0.16b
+    tbl     $v_t1.16b,{$post_s1lo_mask.16b},$v_t1.16b
+    
+    tbl     $v_t4.16b,{$post_s1hi_mask.16b},$v_t4.16b
+    tbl     $v_x.16b,{$post_s1hi_mask.16b},$v_x.16b
+    
+    eor     $v_t4.16b, $v_t4.16b, $v_t0.16b
+    eor     $v_x.16b,  $v_x.16b,  $v_t1.16b
 
     /* P-function */
     tbl     $v_t0.16b,{$v_t4.16b},$sp0222.16b
     tbl     $v_t1.16b,{$v_t4.16b},$sp3033.16b
     tbl     $v_t4.16b,{$v_t4.16b},$sp1110.16b
     tbl     $v_x.16b,{$v_x.16b},$sp0044.16b
-    // s2 = s1 <<< 1 (Rotate Left 1)
-    shl     $v_t2.16b,$v_t0.16b,#1
-    sri     $v_t2.16b,$v_t0.16b,#7
-    // s3 = s1 >>> 1 (Rotate Left 7)
-    shl     $v_t3.16b,$v_t1.16b,#7
-    sri     $v_t3.16b,$v_t1.16b,#1
 
-    //tbl     $v_t1.16b,{$v_t4.16b},$inv_shift_row.16b
-    //tbl     $v_x.16b,{$v_x.16b},$sp0044.16b
-    //tbl     $v_t4.16b,{$v_t4.16b},$sp1110.16b
-    //add     $v_t2.16b,$v_t1.16b,$v_t1.16b
-    //ushr    $v_t0.16b,$v_t1.16b,#7
-    //shl     $v_t3.16b,$v_t1.16b,#7
-    //orr     $v_t0.16b,$v_t0.16b,$v_t2.16b
-    //ushr    $v_t1.16b,$v_t1.16b,#1
-    //tbl     $v_t0.16b,{$v_t0.16b},$sp0222.16b
-    //orr     $v_t1.16b,$v_t1.16b,$v_t3.16b
+    // s2 = s1 <<< 1 (Rotate Left 1)
+    // s3 = s1 >>> 1 (Rotate Left 7)
+    shl     $v_t2.16b,$v_t0.16b,#1
+    shl     $v_t3.16b,$v_t1.16b,#7
 
     eor     $v_t4.16b,$v_x.16b,$v_t4.16b
+
+    sri     $v_t2.16b,$v_t0.16b,#7
+    sri     $v_t3.16b,$v_t1.16b,#1
+
     eor     $v_t2.16b,$v_t3.16b,$v_t2.16b
     eor     $v_t0.16b,$v_t4.16b,$v_t2.16b
-    //tbl     $v_t1.16b,{$v_t1.16b},$sp3033.16b
-    //eor     $v_t0.16b,$v_t0.16b,$v_t4.16b
-    //eor     $v_t0.16b,$v_t0.16b,$v_t1.16b
 
     /* pre-load round subkey (the value already passed in a GPR) */
     fmov    d8,$key     // referring to v_t2 (v8)
